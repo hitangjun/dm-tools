@@ -40,63 +40,102 @@ python main.py
 
 ### 打包为EXE发布(用户无需安装Python)
 
-打包后用户拿到exe直接双击运行，不需要安装Python或任何依赖。打包步骤如下：
+打包后用户拿到exe直接双击运行，不需要安装Python或任何依赖。
 
 #### 前提条件
 
 在打包机器上需要安装：
 - Python 3.10+（仅打包机器需要，目标用户不需要）
-- 项目依赖：`pip install PySide6 sqlparse`
+- 项目依赖：`pip install PySide6 sqlparse dmPython`
 - 打包工具：`pip install pyinstaller`
 
-#### 方式一：目录模式（推荐）
+> **重要提示：dmPython驱动说明**
+>
+> dmPython 是达梦数据库的Python驱动，它用 `try/except` 动态导入，PyInstaller无法自动检测到它。打包时必须用 `--hidden-import dmPython` 显式声明，否则打包后的exe运行时会报"未找到dmPython"。
+>
+> 此外，dmPython 底层依赖 DM 客户端提供的 `dmdpi.dll`（Windows）或 `libdmdpi.so`（Linux）驱动库。这个文件是达梦专有驱动，不在Python包中，需要单独处理。有两种方式：
 
-打包后生成一个文件夹，内含exe和依赖文件。启动速度快，适合分发给用户。
+#### 方式一：将dmdpi.dll放入项目一起打包（推荐，用户零安装）
+
+把 DM 客户端的 `dmdpi.dll` 复制到项目根目录，打包时一起包含进去，这样用户拿到exe后什么都不用装。
 
 ```bash
-# 1. 安装打包工具和依赖
-pip install pyinstaller PySide6 sqlparse
+# 1. 找到dmdpi.dll（通常在DM客户端安装目录的bin目录下）
+#    例如: C:\dmdbms\bin\dmdpi.dll
 
-# 2. 执行打包
-pyinstaller --noconsole --name DM_SQL_Optimizer --add-data "db_config.ini.template;." main.py
-
-# 3. 复制配置文件到输出目录
+# 2. 复制到项目根目录
 # Windows PowerShell:
+Copy-Item "C:\dmdbms\bin\dmdpi.dll" .
+
+# 3. 安装打包工具和依赖
+pip install pyinstaller PySide6 sqlparse dmPython
+
+# 4. 执行打包（--add-data把dmdpi.dll一起打包进去）
+pyinstaller --noconsole --name DM_SQL_Optimizer ^
+  --add-data "db_config.ini.template;." ^
+  --add-data "dmdpi.dll;." ^
+  --hidden-import dmPython ^
+  main.py
+
+# 5. 复制配置文件到输出目录
 Copy-Item db_config.ini.template dist\DM_SQL_Optimizer\db_config.ini
-# Linux/Mac:
-cp db_config.ini.template dist/DM_SQL_Optimizer/db_config.ini
 ```
 
 打包完成后 `dist\DM_SQL_Optimizer\` 目录包含：
 - `DM_SQL_Optimizer.exe` - 主程序，双击即可运行
-- `db_config.ini` - 数据库连接配置文件，用户编辑此文件填写连接信息
+- `dmdpi.dll` - DM驱动库（自动包含）
+- `db_config.ini` - 数据库连接配置文件
 - 其他依赖文件（PySide6运行时等，自动生成）
 
-将整个文件夹打包为zip发给用户即可。
+用户拿到这个文件夹后直接双击exe就能用，不需要安装任何东西。
 
-#### 方式二：单文件模式
+#### 方式二：用户自行安装DM客户端
+
+如果不把 `dmdpi.dll` 打包进去，用户需要在目标机器上安装DM客户端：
+
+```bash
+pip install pyinstaller PySide6 sqlparse dmPython
+
+pyinstaller --noconsole --name DM_SQL_Optimizer ^
+  --add-data "db_config.ini.template;." ^
+  --hidden-import dmPython ^
+  main.py
+```
+
+用户需要自行安装DM客户端（从达梦官网下载），安装后 `dmdpi.dll` 会在系统PATH中。
+
+#### 方式三：单文件模式
 
 打包后只有一个exe文件，方便分发。但每次启动会稍慢（需要解压临时文件）。
 
 ```bash
-pyinstaller --noconsole --onefile --name DM_SQL_Optimizer main.py
+pyinstaller --noconsole --onefile --name DM_SQL_Optimizer ^
+  --add-data "db_config.ini.template;." ^
+  --add-data "dmdpi.dll;." ^
+  --hidden-import dmPython ^
+  main.py
 ```
 
-#### 方式三：使用打包脚本
+> 注意：单文件模式下 dmdpi.dll 会被打包进exe内部，运行时解压到临时目录。如果dmPython找不到它，可能需要把dmdpi.dll放在exe同目录下而不是打包进去。
 
-项目已提供打包脚本，一键完成：
+#### 方式四：使用打包脚本
+
+项目已提供打包脚本和配置文件：
 
 ```bash
 # Windows
 build.bat
 
-# Linux/Mac
-bash build.sh
+# 或使用spec配置文件（已配置好hidden-imports和data文件）
+pyinstaller dm_sql_optimizer.spec --noconfirm
 ```
 
-或使用PyInstaller配置文件：
-```bash
-pyinstaller dm_sql_optimizer.spec --noconfirm
+如果使用spec文件方式，需在spec文件中把dmdpi.dll加入datas：
+```python
+datas=[
+    ('db_config.ini.template', '.'),
+    ('dmdpi.dll', '.'),  # 如果dmdpi.dll在项目目录中
+],
 ```
 
 #### 分发给用户的说明
@@ -105,9 +144,10 @@ pyinstaller dm_sql_optimizer.spec --noconfirm
 1. 解压到任意目录（目录模式）或直接双击exe（单文件模式）
 2. 编辑 `db_config.ini` 填写DM数据库连接信息，或启动后在界面中输入
 3. 双击 `DM_SQL_Optimizer.exe` 运行
-4. 目标机器无需安装Python
-5. 目标机器需要安装DM客户端（提供dmdpi.dll驱动库），用于连接DM数据库
-6. 如果仅使用SQL规范检查和HINT建议功能（不连接数据库），连DM客户端都不需要
+4. **目标机器无需安装Python**
+5. 如果已将 `dmdpi.dll` 一起打包，目标机器也无需安装DM客户端
+6. 如果未打包 `dmdpi.dll`，目标机器需安装DM客户端
+7. 如果仅使用SQL规范检查和HINT建议功能（不连接数据库），什么都不需要装
 
 #### Win7兼容性打包
 
@@ -117,8 +157,12 @@ Windows 7 需要特殊版本组合：
 
 ```bash
 pip install PySide6==6.4.3
-pip install pyinstaller
-pyinstaller --noconsole --name DM_SQL_Optimizer --add-data "db_config.ini.template;." main.py
+pip install pyinstaller dmPython sqlparse
+pyinstaller --noconsole --name DM_SQL_Optimizer ^
+  --add-data "db_config.ini.template;." ^
+  --add-data "dmdpi.dll;." ^
+  --hidden-import dmPython ^
+  main.py
 ```
 
 目标Win7机器需要安装VC++运行库（vcredist_x64.exe，通常已自带）。
@@ -156,11 +200,11 @@ timeout = 30
 
 | 系统 | 开发环境要求 | EXE运行要求 |
 |------|------------|------------|
-| Windows 7 | Python 3.10 + PySide6 6.4.x | VC++运行库 + DM客户端 |
-| Windows 10/11 | Python 3.10+ + PySide6 6.5+ | DM客户端 |
-| Linux | Python 3.10+ + PySide6 | DM客户端(libdmdpi.so) |
+| Windows 7 | Python 3.10 + PySide6 6.4.x | VC++运行库（dmdpi.dll已打包则无需其他） |
+| Windows 10/11 | Python 3.10+ + PySide6 6.5+ | 无（dmdpi.dll已打包则零安装） |
+| Linux | Python 3.10+ + PySide6 | libdmdpi.so（打包或安装DM客户端） |
 
-打包成EXE后，目标机器无需安装Python。
+打包成EXE后，目标机器无需安装Python。如果dmdpi.dll已一起打包，目标机器也无需安装DM客户端。
 
 ## 项目结构
 
@@ -172,6 +216,7 @@ dm_sql_optimizer/
 ├── build.bat / build.sh            # 打包脚本
 ├── dm_sql_optimizer.spec           # PyInstaller配置
 ├── db_config.ini.template          # 配置文件模板
+├── dmdpi.dll                       # DM驱动库(打包时放入，可选)
 │
 ├── core/                           # 核心分析模块(无UI依赖)
 │   ├── dm_connector.py             # DM数据库连接器

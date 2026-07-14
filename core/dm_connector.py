@@ -16,8 +16,6 @@ try:
 except ImportError:
     dmPython = None
 
-from config import DMConnectionConfig
-
 
 @dataclass
 class QueryResult:
@@ -48,7 +46,15 @@ class DMConnector:
         """连接DM数据库"""
         if dmPython is None:
             raise RuntimeError(
-                "未安装dmPython驱动，请执行: pip install dmPython"
+                "未找到dmPython驱动模块，无法连接DM数据库。\n\n"
+                "解决方法:\n"
+                "  1. 确保本机已安装DM客户端(提供dmdpi.dll/libdmdpi.so驱动库)\n"
+                "  2. 安装dmPython: pip install dmPython\n"
+                "  3. 如果是打包后的EXE，需确保:\n"
+                "     - 打包机器上已安装dmPython\n"
+                "     - 打包时加了 --hidden-import dmPython 参数\n"
+                "     - 目标机器上已安装DM客户端\n"
+                "  4. 如果不需要连接数据库，可使用SQL规范检查和HINT建议功能(离线可用)"
             )
         try:
             self._conn = dmPython.connect(
