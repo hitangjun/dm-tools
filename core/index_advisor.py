@@ -68,7 +68,10 @@ class IndexAdvisor:
         result = IndexAnalysisResult()
         if table_stats:
             for table_name, stats in table_stats.items():
-                result.existing_indexes.extend(stats.get("indexes", []))
+                for idx in stats.get("indexes", []):
+                    idx_copy = idx.copy()
+                    idx_copy["table_name"] = table_name
+                    result.existing_indexes.append(idx_copy)
 
         # 解析SQL
         parsed = sqlparse.parse(sql)[0]

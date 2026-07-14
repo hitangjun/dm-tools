@@ -14,16 +14,30 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from ui.main_window import MainWindow
 
 
 def main():
+    # 解决 Windows 任务栏不显示自定义图标的问题
+    if sys.platform == "win32":
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("hitangjun.dmsqloptimizer.1.0")
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("DM SQL优化分析工具")
 
+    # 设置应用图标 (兼容 PyInstaller 单文件打包模式)
+    base_dir = Path(getattr(sys, "_MEIPASS", ROOT))
+    icon_path = base_dir / "assets" / "app_icon.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+
     # 设置全局字体
-    font = QFont("Microsoft YaHei", 10)
+    font = QFont("Microsoft YaHei", 11)
     app.setFont(font)
 
     # 设置应用样式

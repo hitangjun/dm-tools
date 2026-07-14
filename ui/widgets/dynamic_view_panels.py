@@ -5,17 +5,16 @@
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
-    QTreeWidget, QTreeWidgetItem, QTextEdit, QLabel,
+    QTreeWidget, QTreeWidgetItem, QTextEdit, QPlainTextEdit, QLabel,
     QPushButton, QSpinBox, QHeaderView,
-    QMessageBox, QSplitter,
+    QMessageBox, QSplitter, QApplication,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QColor
 
 from core.dm_connector import DMConnector
 from core.dynamic_views import DynamicViewManager
-from core.doc_knowledge import DocKnowledgeBase
-from ui.widgets.doc_info_widget import DocInfoWidget
+
 
 
 class DynamicViewWorker(QThread):
@@ -64,20 +63,17 @@ class DynamicViewWorker(QThread):
 
 class SlowSQLPanel(QWidget):
     """慢SQL抓取面板"""
+    sql_selected = Signal(str)  # 双击或点击载入时发射信号
 
-    def __init__(self, connector: DMConnector, parent=None):
+    def __init__(self, connector: DMConnector, log_fn=None, parent=None):
         super().__init__(parent)
         self.connector = connector
-        self.kb = DocKnowledgeBase()
+        self.log_fn = log_fn
         self.worker = None
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        # 文档信息
-        doc_widget = DocInfoWidget(self.kb.get("slow_sql"))
-        layout.addWidget(doc_widget)
 
         # 操作栏
         toolbar = QHBoxLayout()
@@ -102,23 +98,80 @@ class SlowSQLPanel(QWidget):
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
-        # 结果展示
+        # 上下分割器
+        splitter = QSplitter(Qt.Vertical)
+
+        # 上半部分: Tree列表
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["序号", "耗时(ms)", "执行时间", "SQL文本"])
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(3, QHeaderView.Stretch)
-        layout.addWidget(self.tree)
+        self.tree.currentItemChanged.connect(self._on_row_selected)
+        self.tree.itemDoubleClicked.connect(lambda item, col: self._send_sql())
+        # 右键上下文菜单
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_context_menu)
+        splitter.addWidget(self.tree)
+
+        # 下半部分: 选中SQL详情和参数
+        detail_widget = QWidget()
+        detail_layout = QVBoxLayout(detail_widget)
+        detail_layout.setContentsMargins(0, 5, 0, 0)
+
+        detail_tb = QHBoxLayout()
+        detail_tb.addWidget(QLabel("<b>选中SQL详情与绑定变量参数:</b>"))
+        detail_tb.addStretch()
+
+        self.btn_copy_sql = QPushButton("复制完整SQL")
+        self.btn_copy_sql.clicked.connect(self._copy_sql)
+        self.btn_copy_sql.setEnabled(False)
+        detail_tb.addWidget(self.btn_copy_sql)
+
+        self.btn_send_sql = QPushButton("载入主编辑器")
+        self.btn_send_sql.clicked.connect(self._send_sql)
+        self.btn_send_sql.setEnabled(False)
+        detail_tb.addWidget(self.btn_send_sql)
+
+        detail_layout.addLayout(detail_tb)
+
+        # 左右分割: 左侧 SQL，右侧绑定参数
+        detail_splitter = QSplitter(Qt.Horizontal)
+
+        self.sql_detail = QPlainTextEdit()
+        self.sql_detail.setReadOnly(True)
+        self.sql_detail.setFont(QFont("Consolas", 11))
+        self.sql_detail.setPlaceholderText("在上方列表中选择一行以查看完整 SQL 文本")
+        detail_splitter.addWidget(self.sql_detail)
+
+        self.param_detail = QPlainTextEdit()
+        self.param_detail.setReadOnly(True)
+        self.param_detail.setFont(QFont("Consolas", 11))
+        self.param_detail.setPlaceholderText("选择上方执行历史行以提取绑定参数\n(注：数据库端需开启 ENABLE_MONITOR_BP = 1 监控)")
+        detail_splitter.addWidget(self.param_detail)
+
+        detail_splitter.setSizes([750, 450])
+        detail_layout.addWidget(detail_splitter)
+
+        splitter.addWidget(detail_widget)
+        splitter.setSizes([450, 250])
+        layout.addWidget(splitter, 1)
 
     def _query(self, task_name):
         if not self.connector or not self.connector.is_connected:
             QMessageBox.warning(self, "未连接", "请先连接DM数据库")
             return
 
-        # 等待前一个线程完成
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(3000)
+        if self.worker:
+            try:
+                if self.worker.isRunning():
+                    self.worker.wait(3000)
+            except RuntimeError:
+                self.worker = None
+
+        if self.log_fn:
+            self.log_fn(f"正在执行数据库监控查询: {task_name}...")
 
         self.tree.clear()
         params = {"limit": self.limit_spin.value()} if task_name == "slow_sql" else {}
@@ -129,40 +182,166 @@ class SlowSQLPanel(QWidget):
         self.worker.start()
 
     def _on_finished(self, task_name, data):
+        self.worker = None
         self.tree.clear()
+        self.sql_detail.clear()
+        self.param_detail.clear()
+        self.btn_copy_sql.setEnabled(False)
+        self.btn_send_sql.setEnabled(False)
+
         for i, item in enumerate(data):
             tree_item = QTreeWidgetItem([
                 str(i + 1),
                 str(item.elapsed_ms),
                 item.exec_time,
-                item.sql_text[:200],
+                item.sql_text[:200].replace("\n", " "),
             ])
+            # 存储完整数据到 column 0 (最稳健)
+            tree_item.setData(0, Qt.UserRole, item.sql_text)
+            tree_item.setData(0, Qt.UserRole + 1, item.exec_id)
+            
             # 高亮耗时长的SQL
             if item.elapsed_ms > 5000:
                 tree_item.setForeground(1, QColor("#dc2626"))
             elif item.elapsed_ms > 1000:
                 tree_item.setForeground(1, QColor("#f59e0b"))
             self.tree.addTopLevelItem(tree_item)
+            
+        if self.log_fn:
+            self.log_fn(f"监控查询 {task_name} 执行完毕，获取到 {len(data)} 条数据。", "SUCCESS")
 
     def _on_error(self, task_name, error):
+        self.worker = None
+        if self.log_fn:
+            self.log_fn(f"监控查询 {task_name} 失败: {error}", "ERROR")
         QMessageBox.warning(self, "查询失败", f"{task_name}: {error}")
+
+    def _on_row_selected(self, current, previous):
+        if not current:
+            self.sql_detail.clear()
+            self.param_detail.clear()
+            self.btn_copy_sql.setEnabled(False)
+            self.btn_send_sql.setEnabled(False)
+            return
+
+        sql = current.data(0, Qt.UserRole)
+        exec_id = current.data(0, Qt.UserRole + 1)
+
+        self.sql_detail.setPlainText(sql)
+        self.btn_copy_sql.setEnabled(True)
+        self.btn_send_sql.setEnabled(True)
+
+        self.param_detail.setPlainText("正在拉取/提取绑定变量参数...")
+        self._query_bind_params(exec_id, sql)
+
+    def _query_bind_params(self, exec_id, sql=None):
+        if not self.connector or not self.connector.is_connected:
+            self.param_detail.setPlainText("未连接数据库，无法获取参数。")
+            return
+        try:
+            # 针对慢 SQL (无 exec_id) 进行 SQL 模糊特征历史搜索匹配
+            if (not exec_id or exec_id == "0" or exec_id == "") and sql:
+                cleaned_sql = sql.strip().replace("'", "''")
+                # 取出前150个字符作为搜索特征值
+                search_frag = " ".join(cleaned_sql.split())[:150]
+                
+                res_exec = self.connector.execute(f"""
+                    SELECT TOP 1 EXEC_ID
+                    FROM V$SQL_HISTORY
+                    WHERE TOP_SQL_TEXT LIKE '%{search_frag}%'
+                    ORDER BY START_TIME DESC
+                """)
+                if not res_exec.error and res_exec.rows and res_exec.rows[0][0]:
+                    exec_id = res_exec.rows[0][0]
+
+            if not exec_id or exec_id == "0" or exec_id == "":
+                self.param_detail.setPlainText("当前记录无执行号 (EXEC_ID)，且在归档历史中未搜索到匹配项。\n\n提示：\n1. 达梦仅对使用了 ? 或 :name 占位符的参数化 SQL 记录绑定值；\n2. 需确保已开启达梦系统级变量监控 ENABLE_MONITOR_BP = 1")
+                return
+
+            res = self.connector.execute(f"""
+                SELECT SF_EXTRACT_BIND_DATA_NUM(BINDDATA, 1)
+                FROM V$SQL_BINDDATA_HISTORY
+                WHERE EXEC_ID = {exec_id}
+            """)
+            if res.error or not res.rows or res.rows[0][0] is None:
+                self.param_detail.setPlainText("未检索到当前执行的绑定变量参数。\n\n可能原因：\n1. 该查询未使用绑定变量占位符；\n2. 数据库参数 ENABLE_MONITOR_BP 未启用 (当前为0)；\n3. 该历史参数数据已被系统清理回收。")
+                return
+
+            num_binds = int(res.rows[0][0])
+            params = []
+            for i in range(1, num_binds + 1):
+                char_res = self.connector.execute(f"""
+                    SELECT SF_EXTRACT_BIND_DATA_CHAR(BINDDATA, {i})
+                    FROM V$SQL_BINDDATA_HISTORY
+                    WHERE EXEC_ID = {exec_id}
+                """)
+                if not char_res.error and char_res.rows:
+                    val = char_res.rows[0][0]
+                    params.append(f"参数 #{i}: {val}")
+                else:
+                    params.append(f"参数 #{i}: [提取失败或不支持的二进制数据]")
+
+            self.param_detail.setPlainText("\n".join(params))
+            if self.log_fn:
+                self.log_fn(f"成功获取执行号 {exec_id} 的 {num_binds} 个绑定变量参数。", "SUCCESS")
+        except Exception as e:
+            self.param_detail.setPlainText(f"获取参数失败: {e}")
+            if self.log_fn:
+                self.log_fn(f"获取绑定变量异常: {e}", "ERROR")
+
+    def _copy_sql(self):
+        sql = self.sql_detail.toPlainText().strip()
+        if sql:
+            QApplication.clipboard().setText(sql)
+            if self.log_fn:
+                self.log_fn("选中 SQL 文本已成功复制到剪贴板。", "SUCCESS")
+
+    def _send_sql(self):
+        sql = self.sql_detail.toPlainText().strip()
+        if sql:
+            self.sql_selected.emit(sql)
+            if self.log_fn:
+                self.log_fn("已成功将选中 SQL 载入 SQL 优化分析编辑器。")
+
+    def _show_context_menu(self, pos):
+        item = self.tree.itemAt(pos)
+        if not item:
+            return
+        
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+        
+        menu = QMenu(self)
+        sql = item.data(0, Qt.UserRole)
+        
+        act_analyze = QAction("🔬 分析此 SQL", self)
+        act_analyze.setEnabled(bool(sql and sql.strip()))
+        act_analyze.triggered.connect(lambda: self.sql_selected.emit(sql))
+        menu.addAction(act_analyze)
+        
+        menu.addSeparator()
+        
+        act_copy = QAction("📄 复制完整 SQL", self)
+        act_copy.setEnabled(bool(sql and sql.strip()))
+        act_copy.triggered.connect(self._copy_sql)
+        menu.addAction(act_copy)
+        
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
 
 
 class SessionPanel(QWidget):
     """会话监控面板"""
+    sql_selected = Signal(str)  # 会话右键操作信号
 
-    def __init__(self, connector: DMConnector, parent=None):
+    def __init__(self, connector: DMConnector, log_fn=None, parent=None):
         super().__init__(parent)
         self.connector = connector
-        self.kb = DocKnowledgeBase()
+        self.log_fn = log_fn
         self.worker = None
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        doc_widget = DocInfoWidget(self.kb.get("session_monitor"))
-        layout.addWidget(doc_widget)
 
         toolbar = QHBoxLayout()
         self.btn_all = QPushButton("查询所有会话")
@@ -184,6 +363,9 @@ class SessionPanel(QWidget):
         self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(4, QHeaderView.Stretch)
+        # 右键上下文菜单
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.tree)
 
     def _query(self, active_only):
@@ -191,8 +373,15 @@ class SessionPanel(QWidget):
             QMessageBox.warning(self, "未连接", "请先连接DM数据库")
             return
 
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(3000)
+        if self.worker:
+            try:
+                if self.worker.isRunning():
+                    self.worker.wait(3000)
+            except RuntimeError:
+                self.worker = None
+
+        if self.log_fn:
+            self.log_fn(f"正在查询会话信息 (仅活跃: {active_only})...")
 
         self.tree.clear()
         self.worker = DynamicViewWorker(self.connector, "sessions", {"active_only": active_only})
@@ -202,35 +391,76 @@ class SessionPanel(QWidget):
         self.worker.start()
 
     def _on_finished(self, task_name, data):
+        self.worker = None
         self.tree.clear()
         for item in data:
             tree_item = QTreeWidgetItem([
                 item.sess_id, item.state, item.create_time, item.clnt_host,
-                item.sql_text[:200],
+                item.sql_text[:200].replace("\n", " "),
             ])
+            # 将完整 SQL 存入 column 0
+            tree_item.setData(0, Qt.UserRole, item.sql_text)
             if item.state == "ACTIVE":
                 tree_item.setForeground(1, QColor("#dc2626"))
             self.tree.addTopLevelItem(tree_item)
+        if self.log_fn:
+            self.log_fn(f"会话监控查询完成，共 {len(data)} 个活动会话。", "SUCCESS")
 
     def _on_error(self, task_name, error):
+        self.worker = None
+        if self.log_fn:
+            self.log_fn(f"会话监控查询失败: {error}", "ERROR")
         QMessageBox.warning(self, "查询失败", f"{task_name}: {error}")
+
+    def _show_context_menu(self, pos):
+        item = self.tree.itemAt(pos)
+        if not item:
+            return
+        
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+        
+        menu = QMenu(self)
+        sql = item.data(0, Qt.UserRole)
+        sess_id = item.text(0)
+        
+        act_analyze = QAction("🔬 分析此会话 SQL", self)
+        act_analyze.setEnabled(bool(sql and sql.strip()))
+        act_analyze.triggered.connect(lambda: self.sql_selected.emit(sql))
+        menu.addAction(act_analyze)
+        
+        menu.addSeparator()
+        
+        act_copy_sql = QAction("📄 复制会话 SQL", self)
+        act_copy_sql.setEnabled(bool(sql and sql.strip()))
+        act_copy_sql.triggered.connect(lambda: self._copy_text(sql))
+        menu.addAction(act_copy_sql)
+        
+        act_copy_id = QAction("🆔 复制会话 ID", self)
+        act_copy_id.triggered.connect(lambda: self._copy_text(sess_id))
+        menu.addAction(act_copy_id)
+        
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _copy_text(self, text):
+        if text:
+            QApplication.clipboard().setText(text)
+            if self.log_fn:
+                self.log_fn("文本已成功复制到剪贴板。", "SUCCESS")
 
 
 class SystemStatusPanel(QWidget):
     """系统状态检查面板"""
 
-    def __init__(self, connector: DMConnector, parent=None):
+    def __init__(self, connector: DMConnector, log_fn=None, parent=None):
         super().__init__(parent)
         self.connector = connector
-        self.kb = DocKnowledgeBase()
+        self.log_fn = log_fn
         self.worker = None
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        doc_widget = DocInfoWidget(self.kb.get("system_status"))
-        layout.addWidget(doc_widget)
 
         toolbar = QHBoxLayout()
         self.btn_refresh = QPushButton("🔄 刷新系统状态")
@@ -252,8 +482,15 @@ class SystemStatusPanel(QWidget):
             QMessageBox.warning(self, "未连接", "请先连接DM数据库")
             return
 
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(3000)
+        if self.worker:
+            try:
+                if self.worker.isRunning():
+                    self.worker.wait(3000)
+            except RuntimeError:
+                self.worker = None
+
+        if self.log_fn:
+            self.log_fn("正在获取系统状态参数和命中率指标...")
 
         self.result_text.setPlainText("查询中...")
         self.worker = DynamicViewWorker(self.connector, "system_status")
@@ -263,6 +500,7 @@ class SystemStatusPanel(QWidget):
         self.worker.start()
 
     def _on_finished(self, task_name, data):
+        self.worker = None
         text = "═══ 系统状态 ═══\n\n"
         text += f"实例名: {data.instance_name}\n"
         text += f"版本: {data.version}\n"
@@ -287,26 +525,28 @@ class SystemStatusPanel(QWidget):
             text += "  CALL SP_SET_PARA_VALUE(1, 'BUFFER', <更大的值>);\n"
 
         self.result_text.setPlainText(text)
+        if self.log_fn:
+            self.log_fn(f"系统状态抓取完成。实例运行状态: {data.status}，缓冲池命中率: {hit_pct:.2f}%", "SUCCESS")
 
     def _on_error(self, task_name, error):
+        self.worker = None
         self.result_text.setPlainText(f"查询失败: {error}")
+        if self.log_fn:
+            self.log_fn(f"系统状态查询失败: {error}", "ERROR")
 
 
 class LockWaitPanel(QWidget):
     """锁和事务等待面板"""
 
-    def __init__(self, connector: DMConnector, parent=None):
+    def __init__(self, connector: DMConnector, log_fn=None, parent=None):
         super().__init__(parent)
         self.connector = connector
-        self.kb = DocKnowledgeBase()
+        self.log_fn = log_fn
         self.worker = None
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        doc_widget = DocInfoWidget(self.kb.get("lock_wait"))
-        layout.addWidget(doc_widget)
 
         toolbar = QHBoxLayout()
         self.btn_query = QPushButton("🔍 查询锁和事务信息")
@@ -336,8 +576,15 @@ class LockWaitPanel(QWidget):
             QMessageBox.warning(self, "未连接", "请先连接DM数据库")
             return
 
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(3000)
+        if self.worker:
+            try:
+                if self.worker.isRunning():
+                    self.worker.wait(3000)
+            except RuntimeError:
+                self.worker = None
+
+        if self.log_fn:
+            self.log_fn("正在查询锁冲突及活动事务等待链...")
 
         self.tree.clear()
         self.wait_text.setPlainText("查询中...")
@@ -348,6 +595,7 @@ class LockWaitPanel(QWidget):
         self.worker.start()
 
     def _on_finished(self, task_name, data):
+        self.worker = None
         self.tree.clear()
         locks = data.get("locks", [])
         waits = data.get("waits", [])
@@ -375,26 +623,28 @@ class LockWaitPanel(QWidget):
             text += "  无活跃事务\n"
 
         self.wait_text.setPlainText(text)
+        if self.log_fn:
+            self.log_fn(f"锁和事务状态查询完成。当前锁数量: {len(locks)}，事务等待事件数: {len(waits)}", "SUCCESS")
 
     def _on_error(self, task_name, error):
+        self.worker = None
+        if self.log_fn:
+            self.log_fn(f"锁和事务查询失败: {error}", "ERROR")
         QMessageBox.warning(self, "查询失败", f"{task_name}: {error}")
 
 
 class NodeTimingPanel(QWidget):
     """执行节点耗时分析面板"""
 
-    def __init__(self, connector: DMConnector, parent=None):
+    def __init__(self, connector: DMConnector, log_fn=None, parent=None):
         super().__init__(parent)
         self.connector = connector
-        self.kb = DocKnowledgeBase()
+        self.log_fn = log_fn
         self.worker = None
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        doc_widget = DocInfoWidget(self.kb.get("node_timing"))
-        layout.addWidget(doc_widget)
 
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("EXEC_ID:"))
@@ -424,11 +674,19 @@ class NodeTimingPanel(QWidget):
             QMessageBox.warning(self, "未连接", "请先连接DM数据库")
             return
 
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(3000)
+        if self.worker:
+            try:
+                if self.worker.isRunning():
+                    self.worker.wait(3000)
+            except RuntimeError:
+                self.worker = None
+
+        exec_id = self.exec_id_spin.value()
+        if self.log_fn:
+            self.log_fn(f"正在查询执行计划节点耗时 (EXEC_ID: {'最新' if exec_id==0 else exec_id})...")
 
         self.tree.clear()
-        params = {"exec_id": self.exec_id_spin.value()}
+        params = {"exec_id": exec_id}
         self.worker = DynamicViewWorker(self.connector, "node_timing", params)
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
@@ -472,22 +730,26 @@ class NodeTimingPanel(QWidget):
     }
 
     def _on_finished(self, task_name, data):
+        self.worker = None
         self.tree.clear()
         for item in data:
             desc = self.NODE_DESCRIPTIONS.get(item.node_name, "")
             tree_item = QTreeWidgetItem([
                 item.node_name,
-                str(item.time_used),
+                f"{item.time_used:,}",
                 str(item.n_enter),
                 desc,
             ])
-            # 高亮耗时最高的节点
-            if item.time_used > 10000:
+            # 高亮耗时多的操作符
+            if item.time_used > 100000:  # > 100ms
                 tree_item.setForeground(1, QColor("#dc2626"))
-                tree_item.setForeground(0, QColor("#dc2626"))
-            elif item.time_used > 1000:
+            elif item.time_used > 10000:  # > 10ms
                 tree_item.setForeground(1, QColor("#f59e0b"))
             self.tree.addTopLevelItem(tree_item)
+            
+        self.tree.expandAll()
+        if self.log_fn:
+            self.log_fn(f"节点耗时分析完成，共析出 {len(data)} 个执行节点。", "SUCCESS")
 
         if not data:
             self.tree.addTopLevelItem(QTreeWidgetItem([
@@ -495,4 +757,7 @@ class NodeTimingPanel(QWidget):
             ]))
 
     def _on_error(self, task_name, error):
+        self.worker = None
+        if self.log_fn:
+            self.log_fn(f"节点耗时查询失败: {error}", "ERROR")
         QMessageBox.warning(self, "查询失败", f"{task_name}: {error}")

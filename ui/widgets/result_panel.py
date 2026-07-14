@@ -68,29 +68,82 @@ class ResultPanel(QWidget):
 
         # Tab 2: 执行计划
         self.plan_tab = QWidget()
-        plan_layout = QVBoxLayout(self.plan_tab)
-        self.plan_issues_tree = QTreeWidget()
-        self.plan_issues_tree.setHeaderLabels(["级别", "类别", "问题描述", "建议"])
-        self.plan_issues_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.plan_issues_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.plan_issues_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.plan_issues_tree.header().setSectionResizeMode(3, QHeaderView.Stretch)
-        plan_layout.addWidget(QLabel("发现的问题:"))
-        plan_layout.addWidget(self.plan_issues_tree)
+        plan_layout = QHBoxLayout(self.plan_tab)
+        plan_layout.setContentsMargins(6, 6, 6, 6)
 
+        plan_splitter = QSplitter(Qt.Horizontal)
+
+        # 左侧：执行计划原始树
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(QLabel("达梦执行计划树 (层级缩进):"))
         self.plan_text = QTextEdit()
         self.plan_text.setReadOnly(True)
         self.plan_text.setFont(QFont("Consolas", 10))
-        plan_layout.addWidget(QLabel("执行计划:"))
-        plan_layout.addWidget(self.plan_text)
+        left_layout.addWidget(self.plan_text)
+        plan_splitter.addWidget(left_widget)
+
+        # 右侧：问题列表 + 深度解析建议
+        right_splitter = QSplitter(Qt.Vertical)
+
+        issues_group = QGroupBox("执行计划潜在缺陷/性能瓶颈")
+        issues_layout = QVBoxLayout(issues_group)
+        self.plan_issues_tree = QTreeWidget()
+        self.plan_issues_tree.setHeaderLabels(["级别", "缺陷类别", "节点位置", "具体描述"])
+        self.plan_issues_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.plan_issues_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.plan_issues_tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.plan_issues_tree.header().setSectionResizeMode(3, QHeaderView.Stretch)
+        issues_layout.addWidget(self.plan_issues_tree)
+        right_splitter.addWidget(issues_group)
+
+        explanation_group = QGroupBox("执行计划节点深度解释与调优指导")
+        explanation_layout = QVBoxLayout(explanation_group)
+        self.plan_explanation = QTextEdit()
+        self.plan_explanation.setReadOnly(True)
+        self.plan_explanation.setFont(QFont("Microsoft YaHei", 10))
+        explanation_layout.addWidget(self.plan_explanation)
+        right_splitter.addWidget(explanation_group)
+
+        right_splitter.setSizes([180, 320])
+        plan_splitter.addWidget(right_splitter)
+
+        plan_splitter.setSizes([450, 550])
+        plan_layout.addWidget(plan_splitter)
         self.tabs.addTab(self.plan_tab, "执行计划分析")
 
         # Tab 3: 索引建议
         self.index_tab = QWidget()
         index_layout = QVBoxLayout(self.index_tab)
+        index_layout.setContentsMargins(6, 6, 6, 6)
+
+        # 用 QSplitter 上下分割: 上为已有索引，下为优化建议
+        index_splitter = QSplitter(Qt.Vertical)
+
+        # 上半部分：当前已有索引
+        existing_group = QGroupBox("当前表结构已有索引 (数据库真实状态)")
+        existing_layout = QVBoxLayout(existing_group)
+        self.existing_index_tree = QTreeWidget()
+        self.existing_index_tree.setHeaderLabels([
+            "表名", "索引名", "类型", "唯一性", "包含的列", "索引行数", "上次分析时间"
+        ])
+        self.existing_index_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.existing_index_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.existing_index_tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.existing_index_tree.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.existing_index_tree.header().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.existing_index_tree.header().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.existing_index_tree.header().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        existing_layout.addWidget(self.existing_index_tree)
+        index_splitter.addWidget(existing_group)
+
+        # 下半部分：推荐的优化索引建议
+        recommend_group = QGroupBox("推荐优化索引建议")
+        recommend_layout = QVBoxLayout(recommend_group)
         self.index_tree = QTreeWidget()
         self.index_tree.setHeaderLabels([
-            "优先级", "表名", "建议类型", "列", "原因", "DDL"
+            "优先级", "表名", "建议类型", "建议列", "建议原因", "建议DDL语句"
         ])
         self.index_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.index_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -98,7 +151,11 @@ class ResultPanel(QWidget):
         self.index_tree.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.index_tree.header().setSectionResizeMode(4, QHeaderView.Stretch)
         self.index_tree.header().setSectionResizeMode(5, QHeaderView.Stretch)
-        index_layout.addWidget(self.index_tree)
+        recommend_layout.addWidget(self.index_tree)
+        index_splitter.addWidget(recommend_group)
+
+        index_splitter.setSizes([200, 350])
+        index_layout.addWidget(index_splitter)
         self.tabs.addTab(self.index_tab, "索引建议")
 
         # Tab 4: 统计信息
@@ -119,6 +176,29 @@ class ResultPanel(QWidget):
         lint_layout.addWidget(self.lint_tree)
         self.tabs.addTab(self.lint_tab, "SQL写法规范")
 
+        # Tab 6: 表结构 DDL
+        self.ddl_tab = QWidget()
+        ddl_layout = QVBoxLayout(self.ddl_tab)
+        ddl_layout.setContentsMargins(6, 6, 6, 6)
+
+        ddl_splitter = QSplitter(Qt.Horizontal)
+
+        self.ddl_tables_tree = QTreeWidget()
+        self.ddl_tables_tree.setHeaderLabels(["表名"])
+        self.ddl_tables_tree.currentItemChanged.connect(self._on_ddl_table_changed)
+        ddl_splitter.addWidget(self.ddl_tables_tree)
+
+        self.ddl_text = QTextEdit()
+        self.ddl_text.setReadOnly(True)
+        self.ddl_text.setFont(QFont("Consolas", 10))
+        ddl_splitter.addWidget(self.ddl_text)
+
+        ddl_splitter.setSizes([150, 500])
+        ddl_layout.addWidget(ddl_splitter)
+        self.tabs.addTab(self.ddl_tab, "表结构 DDL")
+
+        self.ddls = {}  # 存储表 DDL 数据
+
         layout.addWidget(self.tabs)
 
     # ------------------------------------------------------------------
@@ -132,7 +212,12 @@ class ResultPanel(QWidget):
         self.overview_tab.clear()
         self.plan_issues_tree.clear()
         self.plan_text.clear()
+        self.plan_explanation.clear()
         self.index_tree.clear()
+        self.existing_index_tree.clear()
+        self.ddl_tables_tree.clear()
+        self.ddl_text.clear()
+        self.ddls = {}
         self.stats_tab.clear()
         self.lint_tree.clear()
 
@@ -144,6 +229,7 @@ class ResultPanel(QWidget):
         lint_result=None,
         plan_text="",
         error=None,
+        ddls=None,
     ):
         """展示所有分析结果"""
 
@@ -189,6 +275,9 @@ class ResultPanel(QWidget):
 
         # SQL规范
         self._show_lint(lint_result)
+
+        # 展示 DDL
+        self._show_ddl(ddls)
 
     def _show_overview(self, plan_result, index_result, stats_result, lint_result):
         """总览"""
@@ -239,23 +328,87 @@ class ResultPanel(QWidget):
     def _show_plan(self, plan_result, plan_text):
         """执行计划"""
         self.plan_text.setPlainText(plan_text)
-        if plan_result:
+        self.plan_issues_tree.clear()
+        self.plan_explanation.clear()
+
+        if not plan_result:
+            self.plan_explanation.setPlainText("未获取到执行计划分析结果。")
+            return
+
+        # 1. 填充问题树
+        for issue in plan_result.issues:
+            level_text = LEVEL_LABELS.get(issue.level.value, issue.level.value)
+            item = QTreeWidgetItem([
+                level_text,
+                issue.category,
+                issue.location,
+                issue.description,
+            ])
+            color = LEVEL_COLORS.get(issue.level.value, "black")
+            item.setForeground(0, QColor(color))
+            self.plan_issues_tree.addTopLevelItem(item)
+
+        # 2. 生成深度解析与调优建议 HTML
+        html = "<html><body style='font-family: Microsoft YaHei; font-size: 10pt; line-height: 1.45;'>"
+        html += "<h3>🔍 优化器执行计划评估分析</h3>"
+        html += f"<p><b>综合评估评分</b>: <span style='font-size: 12pt; font-weight: bold; color: {'green' if plan_result.cost_score >= 80 else ('#f59e0b' if plan_result.cost_score >= 60 else 'red')}'>{plan_result.cost_score} / 100</span></p>"
+        html += f"<p><b>关键算子特征统计</b>: 全表扫描(SSCN/CSCN) <b>{plan_result.table_scans}</b> 次，多表连接 <b>{plan_result.join_count}</b> 次，内存/磁盘排序 <b>{plan_result.sort_count}</b> 次。</p>"
+        
+        html += "<h3>💡 执行计划节点缺陷定位说明</h3>"
+        if plan_result.issues:
+            html += "<ol style='padding-left: 20px;'>"
             for issue in plan_result.issues:
-                level_text = LEVEL_LABELS.get(issue.level.value, issue.level.value)
-                item = QTreeWidgetItem([
-                    level_text,
-                    issue.category,
-                    issue.description,
-                    issue.suggestion,
-                ])
-                color = LEVEL_COLORS.get(issue.level.value, "black")
-                item.setForeground(0, QColor(color))
-                self.plan_issues_tree.addTopLevelItem(item)
+                html += f"<li style='margin-bottom: 12px;'><b>[{issue.category}]</b> (节点处于 {issue.location}):<br/>"
+                html += f"  <span style='color: #4b5563;'>算子特征: {issue.operation}</span><br/>"
+                html += f"  <span style='color: #b91c1c;'>影响危害: {issue.description}</span><br/>"
+                html += f"  <span style='color: #15803d; font-weight: bold;'>优化建议: {issue.suggestion}</span>"
+                html += "</li>"
+            html += "</ol>"
+        else:
+            html += "<p style='color: #16a34a; font-weight: bold;'>🎉 该执行计划无高危算子，执行路径良好，未检测到全表扫描或高危笛卡尔积。</p>"
+            
+        html += "<h3>🛠️ 达梦执行计划调优常规方针</h3>"
+        html += "<ul style='padding-left: 20px; line-height: 1.6;'>"
+        html += "  <li><b>表/索引统计信息收集</b>: 达梦是基于代价的优化器 (CBO)，执行计划里的“估算代价”(Cost) 是相对值。若估算代价或行数与实际物理情况发生巨大偏差，常导致错选执行路径。请尝试执行 <code>DBMS_STATS.GATHER_TABLE_STATS</code> 重新收集统计信息。</li>"
+        html += "  <li><b>使用 HINT 引导优化器</b>: 达梦支持类似 <code>/*+ USE_HASH(表名) */</code>，<code>/*+ INDEX(表名 索引名) */</code> 等 HINT 语法，可强制纠正由于 CBO 估算失准造成的连接类型/扫描路径选错。</li>"
+        html += "  <li><b>优化全表扫描 (SSCN/CSCN)</b>: SSCN 为索引全扫描，CSCN 为聚集索引扫描（即全表扫描）。对有 CSCN 的大表，应检查 WHERE 条件列上是否遗漏了非聚集索引，或是否对索引列使用了函数计算（例如 <code>TO_CHAR(COL)</code>）导致索引失效。</li>"
+        html += "</ul>"
+        html += "</body></html>"
+        
+        self.plan_explanation.setHtml(html)
 
     def _show_index(self, index_result):
         """索引建议"""
+        self.index_tree.clear()
+        self.existing_index_tree.clear()
         if not index_result:
             return
+
+        # 展示当前已有索引
+        if hasattr(index_result, "existing_indexes") and index_result.existing_indexes:
+            for idx in index_result.existing_indexes:
+                columns_str = ", ".join(idx.get("columns", []))
+                uniqueness = "唯一" if idx.get("uniqueness") == "UNIQUE" else "非唯一"
+                analyzed = idx.get("last_analyzed") or "未分析"
+                rows = f"{idx.get('num_rows'):,}" if idx.get("num_rows") is not None else "N/A"
+                
+                item = QTreeWidgetItem([
+                    idx.get("table_name", "UNKNOWN"),
+                    idx.get("name", ""),
+                    idx.get("type", ""),
+                    uniqueness,
+                    columns_str,
+                    rows,
+                    analyzed,
+                ])
+                self.existing_index_tree.addTopLevelItem(item)
+        else:
+            item = QTreeWidgetItem([
+                "未获取到已有索引信息（可能未连接数据库或表无索引）"
+            ])
+            self.existing_index_tree.addTopLevelItem(item)
+
+        # 展示推荐优化建议
         for s in index_result.suggestions:
             priority_text = "★" * s.priority + "☆" * (5 - s.priority)
             item = QTreeWidgetItem([
@@ -298,3 +451,30 @@ class ResultPanel(QWidget):
             color = LEVEL_COLORS.get(rule.level, "black")
             item.setForeground(0, QColor(color))
             self.lint_tree.addTopLevelItem(item)
+
+    def _show_ddl(self, ddls):
+        """展示表 DDL"""
+        self.ddl_tables_tree.clear()
+        self.ddl_text.clear()
+        self.ddls = ddls or {}
+
+        if not self.ddls:
+            item = QTreeWidgetItem(["无关联表 DDL 信息"])
+            self.ddl_tables_tree.addTopLevelItem(item)
+            return
+
+        for table_name in sorted(self.ddls.keys()):
+            item = QTreeWidgetItem([table_name])
+            self.ddl_tables_tree.addTopLevelItem(item)
+
+        # 默认选中第一个
+        if self.ddl_tables_tree.topLevelItemCount() > 0:
+            self.ddl_tables_tree.setCurrentItem(self.ddl_tables_tree.topLevelItem(0))
+
+    def _on_ddl_table_changed(self, current, previous):
+        if not current:
+            self.ddl_text.clear()
+            return
+        table_name = current.text(0)
+        ddl = self.ddls.get(table_name, "")
+        self.ddl_text.setPlainText(ddl)

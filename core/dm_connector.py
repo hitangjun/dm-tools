@@ -10,6 +10,7 @@ DM数据库连接管理模块
 import re
 from typing import Optional
 from dataclasses import dataclass
+from config import DMConnectionConfig
 
 try:
     import dmPython
@@ -158,6 +159,64 @@ class DMConnector:
         """将查询结果格式化为执行计划文本"""
         if not result.columns:
             return ""
+        
+        # 检查是否是达梦结构化执行计划表格 (通常包含 LEVEL_ID 和 OPERATION)
+        col_names = [c.upper() for c in result.columns]
+        if "LEVEL_ID" in col_names and "OPERATION" in col_names:
+            level_idx = col_names.index("LEVEL_ID")
+            op_idx = col_names.index("OPERATION")
+            
+            # 其他需要展示的辅助性能/对象列
+            tab_idx = col_names.index("TAB_NAME") if "TAB_NAME" in col_names else -1
+            idx_idx = col_names.index("IDX_NAME") if "IDX_NAME" in col_names else -1
+            rows_idx = col_names.index("ROW_NUMS") if "ROW_NUMS" in col_names else -1
+            cost_idx = col_names.index("COST") if "COST" in col_names else -1
+            filter_idx = col_names.index("FILTER") if "FILTER" in col_names else -1
+            join_idx = col_names.index("JOIN_COND") if "JOIN_COND" in col_names else -1
+
+            lines = []
+            lines.append("达梦数据库执行计划树 (层级缩进):")
+            lines.append("=" * 90)
+            
+            for row in result.rows:
+                level = 0
+                try:
+                    level = int(row[level_idx]) if row[level_idx] is not None else 0
+                except ValueError:
+                    pass
+                
+                op = str(row[op_idx]) if row[op_idx] is not None else "NULL"
+                
+                # 提取并组装当前节点的关键指标
+                info = []
+                if tab_idx != -1 and row[tab_idx] and str(row[tab_idx]).upper() != "NULL":
+                    info.append(f"表: {row[tab_idx]}")
+                if idx_idx != -1 and row[idx_idx] and str(row[idx_idx]).upper() != "NULL":
+                    info.append(f"索引: {row[idx_idx]}")
+                if rows_idx != -1 and row[rows_idx] and str(row[rows_idx]).upper() != "NULL":
+                    info.append(f"估算行数: {row[rows_idx]}")
+                if cost_idx != -1 and row[cost_idx] and str(row[cost_idx]).upper() != "NULL":
+                    info.append(f"估算代价: {row[cost_idx]}")
+                if filter_idx != -1 and row[filter_idx] and str(row[filter_idx]).upper() != "NULL":
+                    info.append(f"过滤条件: {row[filter_idx]}")
+                if join_idx != -1 and row[join_idx] and str(row[join_idx]).upper() != "NULL":
+                    info.append(f"连接条件: {row[join_idx]}")
+                
+                info_str = f" [{', '.join(info)}]" if info else ""
+                
+                # 使用缩进空格表示树层级
+                indent = "  " * level
+                lines.append(f"{indent}└─ {op}{info_str}")
+                
+            lines.append("=" * 90)
+            return "\n".join(lines)
+            
+        return self._format_raw_table(result)
+
+    def _format_raw_table(self, result: QueryResult) -> str:
+        """将查询结果格式化为原始表格文本"""
+        if not result.columns:
+            return ""
         lines = []
         # 计算每列最大宽度
         col_widths = []
@@ -274,3 +333,27 @@ class DMConnector:
             "columns": columns,
             "indexes": indexes,
         }
+
+    def get_table_ddl(self, table_name: str) -> str:
+        """获取表的 DDL 定义语句"""
+        schema = self.config.schema or self.config.user
+        result = self.execute(f"""
+            SELECT DBMS_METADATA.GET_DDL('TABLE', UPPER('{table_name}'), UPPER('{schema}')) FROM DUAL
+        """)
+        if result.error or not result.rows or not result.rows[0][0]:
+            if result.error:
+                # 尝试用较通用的回退方案：只查询列信息自己组装一个简易的 DDL
+                cols = self.get_table_columns(table_name)
+                if cols:
+                    ddl_lines = [f"CREATE TABLE {table_name.upper()} ("]
+                    col_defs = []
+                    for c in cols:
+                        nullable_str = "NULL" if c["nullable"] else "NOT NULL"
+                        default_str = f" DEFAULT {c['default']}" if c["default"] else ""
+                        col_defs.append(f"    {c['name']} {c['type']}({c['length']}){default_str} {nullable_str}")
+                    ddl_lines.append(",\n".join(col_defs))
+                    ddl_lines.append(");")
+                    return "\n".join(ddl_lines) + f"\n\n-- 提示: DBMS_METADATA 获取失败，以上为根据列元数据自动拼装的简易 DDL。\n-- 错误: {result.error}"
+                return f"-- 获取 DDL 失败: {result.error}"
+            return f"-- 未找到表 {table_name} 的 DDL 定义"
+        return str(result.rows[0][0])

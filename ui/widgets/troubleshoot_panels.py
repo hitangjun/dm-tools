@@ -15,7 +15,6 @@ from PySide6.QtGui import QFont, QColor
 from core.dm_connector import DMConnector
 from core.troubleshoot import ParamChecker, HintAdvisor, TroubleshootGuide
 from core.doc_knowledge import DocKnowledgeBase
-from ui.widgets.doc_info_widget import DocInfoWidget
 
 
 class ParamCheckWorker(QThread):
@@ -39,18 +38,15 @@ class ParamCheckWorker(QThread):
 class ParamPanel(QWidget):
     """配置参数查看面板"""
 
-    def __init__(self, connector: DMConnector, parent=None):
+    def __init__(self, connector: DMConnector, log_fn=None, parent=None):
         super().__init__(parent)
         self.connector = connector
-        self.kb = DocKnowledgeBase()
+        self.log_fn = log_fn
         self.worker = None
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        doc_widget = DocInfoWidget(self.kb.get("param_check"))
-        layout.addWidget(doc_widget)
 
         toolbar = QHBoxLayout()
         self.btn_check = QPushButton("🔍 检查所有关键参数")
@@ -77,8 +73,15 @@ class ParamPanel(QWidget):
             QMessageBox.warning(self, "未连接", "请先连接DM数据库")
             return
 
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(3000)
+        if self.worker:
+            try:
+                if self.worker.isRunning():
+                    self.worker.wait(3000)
+            except RuntimeError:
+                self.worker = None
+
+        if self.log_fn:
+            self.log_fn("正在执行达梦数据库关键参数安全与性能配置校验...")
 
         self.tree.clear()
         self.worker = ParamCheckWorker(self.connector)
@@ -88,6 +91,7 @@ class ParamPanel(QWidget):
         self.worker.start()
 
     def _on_finished(self, params):
+        self.worker = None
         self.tree.clear()
         for p in params:
             # 判断状态
@@ -106,25 +110,27 @@ class ParamPanel(QWidget):
             elif status == "✅":
                 item.setForeground(5, QColor("#16a34a"))
             self.tree.addTopLevelItem(item)
+        if self.log_fn:
+            self.log_fn(f"达梦数据库参数校验完毕，共检测了 {len(params)} 项配置。", "SUCCESS")
 
     def _on_error(self, error):
+        self.worker = None
+        if self.log_fn:
+            self.log_fn(f"数据库参数校验失败: {error}", "ERROR")
         QMessageBox.warning(self, "查询失败", error)
 
 
 class HintPanel(QWidget):
     """HINT优化建议面板"""
 
-    def __init__(self, parent=None):
+    def __init__(self, log_fn=None, parent=None):
         super().__init__(parent)
-        self.kb = DocKnowledgeBase()
+        self.log_fn = log_fn
         self.advisor = HintAdvisor()
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        doc_widget = DocInfoWidget(self.kb.get("hint_advisor"))
-        layout.addWidget(doc_widget)
 
         # SQL输入
         layout.addWidget(QLabel("输入SQL语句:"))
@@ -156,6 +162,9 @@ class HintPanel(QWidget):
             QMessageBox.warning(self, "提示", "请输入SQL语句")
             return
 
+        if self.log_fn:
+            self.log_fn("正在解析SQL生成达梦HINT优化建议...")
+
         result = self.advisor.analyze(sql)
 
         html = "<html><body style='font-family: Microsoft YaHei; font-size: 10pt;'>"
@@ -170,6 +179,8 @@ class HintPanel(QWidget):
 
         html += "</body></html>"
         self.result_text.setHtml(html)
+        if self.log_fn:
+            self.log_fn(f"HINT优化建议生成成功。匹配到 {len(result.suggestions)} 条优化路径。", "SUCCESS")
 
     def set_sql(self, sql: str):
         self.sql_input.setPlainText(sql)
@@ -178,16 +189,15 @@ class HintPanel(QWidget):
 class TroubleshootPanel(QWidget):
     """问题排查指引面板"""
 
-    def __init__(self, parent=None):
+    def __init__(self, log_fn=None, parent=None):
         super().__init__(parent)
-        self.kb = DocKnowledgeBase()
+        self.log_fn = log_fn
         self._init_ui()
+        if self.log_fn:
+            self.log_fn("加载达梦数据库常见问题排查指引和硬件布局优化规范。")
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        doc_widget = DocInfoWidget(self.kb.get("troubleshoot"))
-        layout.addWidget(doc_widget)
 
         # 排查步骤
         steps = TroubleshootGuide.get_troubleshoot_steps()
@@ -231,16 +241,16 @@ class TroubleshootPanel(QWidget):
 class SQLBestPracticePanel(QWidget):
     """SQL开发最佳实践面板"""
 
-    def __init__(self, parent=None):
+    def __init__(self, log_fn=None, parent=None):
         super().__init__(parent)
+        self.log_fn = log_fn
         self.kb = DocKnowledgeBase()
         self._init_ui()
+        if self.log_fn:
+            self.log_fn("加载达梦数据库SQL开发最佳实践指引库。")
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-
-        doc_widget = DocInfoWidget(self.kb.get("sql_best_practice"))
-        layout.addWidget(doc_widget)
 
         info_text = QTextEdit()
         info_text.setReadOnly(True)

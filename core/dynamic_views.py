@@ -19,6 +19,7 @@ class SlowSQLItem:
     elapsed_ms: int           # 执行耗时(毫秒)
     exec_time: str = ""       # 执行时间
     seq_no: int = 0           # 序号
+    exec_id: str = ""         # 执行ID (绑定变量查询用)
 
 
 @dataclass
@@ -136,9 +137,9 @@ class DynamicViewManager:
             return []
 
         result = self.connector.execute(f"""
-            SELECT TOP {limit} SESS_ID, TOP_SQL_TEXT, TIME_USED
+            SELECT TOP {limit} START_TIME, TOP_SQL_TEXT, TIME_USED, EXEC_ID
             FROM V$SQL_HISTORY
-            ORDER BY TIME_USED DESC
+            ORDER BY START_TIME DESC
         """)
         items = []
         if result.error:
@@ -148,6 +149,9 @@ class DynamicViewManager:
             items.append(SlowSQLItem(
                 sql_text=str(row[1]) if len(row) > 1 else "",
                 elapsed_ms=int(row[2]) if len(row) > 2 and row[2] else 0,
+                exec_time=str(row[0]) if len(row) > 0 else "",
+                seq_no=0,
+                exec_id=str(row[3]) if len(row) > 3 and row[3] is not None else "",
             ))
         return items
 

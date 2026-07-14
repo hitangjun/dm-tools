@@ -51,6 +51,7 @@ class PlanAnalyzer:
         r"TABLE\s+SCAN\s+FULL",    # 全表扫描
         r"FULL\s+TABLE\s+SCAN",
         r"SSCN",                   # DM执行计划中的全表扫描标识
+        r"CSCN",                   # DM执行计划中的聚簇索引扫描(等同全表扫描)
         r"TABLE\s+ACCESS\s+FULL",
     ]
 
@@ -63,9 +64,9 @@ class PlanAnalyzer:
     ]
 
     JOIN_PATTERNS = [
-        (r"HASH\s+JOIN", "HASH JOIN"),
-        (r"NESTED\s+LOOP", "NESTED LOOP JOIN"),
-        (r"MERGE\s+JOIN", "MERGE JOIN"),
+        (r"HASH\s+JOIN|HJIN", "HASH JOIN"),
+        (r"NESTED\s+LOOP|NLJN", "NESTED LOOP JOIN"),
+        (r"MERGE\s+JOIN|MJIN", "MERGE JOIN"),
         (r"HJOIN", "HASH JOIN"),
         (r"NLJOIN", "NESTED LOOP JOIN"),
         (r"MJOIN", "MERGE JOIN"),
@@ -82,9 +83,9 @@ class PlanAnalyzer:
 
     # 高代价操作
     HIGH_COST_OPS = [
-        ("HASH JOIN", "哈希连接，大表场景下内存消耗大"),
+        ("HASH JOIN|HJIN", "哈希连接，大表场景下内存消耗大"),
         ("SORT", "排序操作，内存不足时会写临时表空间"),
-        ("HASH GROUP", "哈希聚合，内存消耗较大"),
+        ("HASH GROUP|HGRP", "哈希聚合，内存消耗较大"),
         ("WINDOW SORT", "窗口函数排序"),
     ]
 
@@ -123,17 +124,17 @@ class PlanAnalyzer:
         for pattern in self.FULL_SCAN_PATTERNS:
             if re.search(pattern, line_upper):
                 result.table_scans += 1
-                # 提取表名
-                table_match = re.search(r'(?:ON|OF|TABLE)\s+(\w+)', line_upper)
+                # 提取表名 (支持 ON/OF/TABLE 以及格式化后的 表:)
+                table_match = re.search(r'(?:ON|OF|TABLE|表:)\s*(\w+)', line_upper)
                 table_name = table_match.group(1) if table_match else "未知表"
                 result.issues.append(PlanIssue(
-                    level=RiskLevel.CRITICAL,
-                    category="全表扫描",
-                    operation=line.strip(),
-                    description=f"检测到对表 {table_name} 的全表扫描，大数据量表上会导致严重性能问题",
-                    suggestion=f"建议在 {table_name} 的过滤条件列上创建合适的索引，"
-                               f"或检查WHERE条件是否可以使用已有索引",
-                    location=f"第{line_no + 1}行",
+                     level=RiskLevel.CRITICAL,
+                     category="全表扫描",
+                     operation=line.strip(),
+                     description=f"检测到对表 {table_name} 的全表扫描，大数据量表上会导致严重性能问题",
+                     suggestion=f"建议在 {table_name} 的过滤条件列上创建合适的索引，"
+                                f"或检查WHERE条件是否可以使用已有索引",
+                     location=f"第{line_no + 1}行",
                 ))
                 break
 

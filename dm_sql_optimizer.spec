@@ -24,7 +24,7 @@ block_cipher = None
 #   (可用 pefile 解析导入表得出最小集；详见项目说明)。
 #   存在时打包目录下所有 .dll。
 # 回退方案: 项目根目录的 dmdpi.dll —— 仅打包驱动本体，目标机器需自行安装 DM 客户端。
-extra_datas = [('db_config.ini.template', '.')]
+extra_datas = [('db_config.ini.template', '.'), ('assets/app_icon.png', 'assets')]
 if os.path.isdir('dm-dll'):
     for name in sorted(os.listdir('dm-dll')):
         if name.lower().endswith('.dll'):
@@ -91,4 +91,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/app_icon.ico',
 )
