@@ -27,6 +27,7 @@
 - 内嵌5份达梦官方文档知识(动态管理/问题跟踪/查询优化/SQL调优/执行计划操作符)
 - 每个功能上方显示对应文档内容和操作提示
 - SQL示例可一键复制
+- 完全离线使用，无需网络连接
 
 ## 快速开始
 
@@ -37,21 +38,90 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### 打包为EXE(无需安装Python)
+### 打包为EXE发布(用户无需安装Python)
+
+打包后用户拿到exe直接双击运行，不需要安装Python或任何依赖。打包步骤如下：
+
+#### 前提条件
+
+在打包机器上需要安装：
+- Python 3.10+（仅打包机器需要，目标用户不需要）
+- 项目依赖：`pip install PySide6 sqlparse`
+- 打包工具：`pip install pyinstaller`
+
+#### 方式一：目录模式（推荐）
+
+打包后生成一个文件夹，内含exe和依赖文件。启动速度快，适合分发给用户。
+
+```bash
+# 1. 安装打包工具和依赖
+pip install pyinstaller PySide6 sqlparse
+
+# 2. 执行打包
+pyinstaller --noconsole --name DM_SQL_Optimizer --add-data "db_config.ini.template;." main.py
+
+# 3. 复制配置文件到输出目录
+# Windows PowerShell:
+Copy-Item db_config.ini.template dist\DM_SQL_Optimizer\db_config.ini
+# Linux/Mac:
+cp db_config.ini.template dist/DM_SQL_Optimizer/db_config.ini
+```
+
+打包完成后 `dist\DM_SQL_Optimizer\` 目录包含：
+- `DM_SQL_Optimizer.exe` - 主程序，双击即可运行
+- `db_config.ini` - 数据库连接配置文件，用户编辑此文件填写连接信息
+- 其他依赖文件（PySide6运行时等，自动生成）
+
+将整个文件夹打包为zip发给用户即可。
+
+#### 方式二：单文件模式
+
+打包后只有一个exe文件，方便分发。但每次启动会稍慢（需要解压临时文件）。
+
+```bash
+pyinstaller --noconsole --onefile --name DM_SQL_Optimizer main.py
+```
+
+#### 方式三：使用打包脚本
+
+项目已提供打包脚本，一键完成：
 
 ```bash
 # Windows
-pip install pyinstaller
 build.bat
 
-# 或手动打包
+# Linux/Mac
+bash build.sh
+```
+
+或使用PyInstaller配置文件：
+```bash
 pyinstaller dm_sql_optimizer.spec --noconfirm
 ```
 
-打包后的 `dist/` 目录包含:
-- `DM_SQL_Optimizer.exe` - 主程序
-- `db_config.ini` - 数据库连接配置文件
-- 其他依赖文件
+#### 分发给用户的说明
+
+用户拿到打包好的程序后：
+1. 解压到任意目录（目录模式）或直接双击exe（单文件模式）
+2. 编辑 `db_config.ini` 填写DM数据库连接信息，或启动后在界面中输入
+3. 双击 `DM_SQL_Optimizer.exe` 运行
+4. 目标机器无需安装Python
+5. 目标机器需要安装DM客户端（提供dmdpi.dll驱动库），用于连接DM数据库
+6. 如果仅使用SQL规范检查和HINT建议功能（不连接数据库），连DM客户端都不需要
+
+#### Win7兼容性打包
+
+Windows 7 需要特殊版本组合：
+- Python 3.10（最后支持Win7的Python版本）
+- PySide6 6.4.x（6.5+不支持Win7）
+
+```bash
+pip install PySide6==6.4.3
+pip install pyinstaller
+pyinstaller --noconsole --name DM_SQL_Optimizer --add-data "db_config.ini.template;." main.py
+```
+
+目标Win7机器需要安装VC++运行库（vcredist_x64.exe，通常已自带）。
 
 ### ⚠️ 安全提示：创建只读账号
 
@@ -84,15 +154,13 @@ timeout = 30
 
 ## 系统兼容性
 
-| 系统 | 要求 |
-|------|------|
-| Windows 7 | Python 3.10 + PySide6 6.4.x + VC++运行库 |
-| Windows 10/11 | Python 3.10+ + PySide6 6.5+ |
-| Linux | Python 3.10+ + PySide6 |
+| 系统 | 开发环境要求 | EXE运行要求 |
+|------|------------|------------|
+| Windows 7 | Python 3.10 + PySide6 6.4.x | VC++运行库 + DM客户端 |
+| Windows 10/11 | Python 3.10+ + PySide6 6.5+ | DM客户端 |
+| Linux | Python 3.10+ + PySide6 | DM客户端(libdmdpi.so) |
 
-打包成EXE后，目标机器**无需安装Python**，但需要:
-- Windows: 安装VC++运行库(通常已自带)
-- 所有系统: 安装DM客户端(提供dmdpi.dll/libdmdpi.so驱动库)
+打包成EXE后，目标机器无需安装Python。
 
 ## 项目结构
 
