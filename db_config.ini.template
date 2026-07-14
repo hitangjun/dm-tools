@@ -1,0 +1,42 @@
+# DM数据库连接配置文件
+#
+# 使用说明:
+#   1. 复制此文件为 db_config.ini
+#   2. 修改下面的连接信息为你的DM数据库信息
+#   3. 程序启动时会自动读取此文件并预填连接信息
+#   4. 也可以在程序界面中直接输入连接信息(会覆盖此文件)
+#
+# 注意: 此文件中的密码为明文，请注意文件权限控制！
+#       建议仅在内网/开发环境使用，生产环境请在程序界面中手动输入。
+
+[database]
+# DM数据库主机地址
+host = 127.0.0.1
+
+# DM数据库端口(默认5236)
+port = 5236
+
+# 数据库用户名(DBA账号)
+user = SYSDBA
+
+# 数据库密码
+password = SYSDBA
+
+# 默认Schema(可选，留空则使用用户名)
+schema =
+
+# 连接超时(秒)
+timeout = 30
+
+[app]
+# 慢SQL阈值(毫秒)
+slow_threshold_ms = 1000
+
+# 执行计划估算最大行数
+max_rows_explain = 10000
+
+# 自动检查统计信息
+enable_auto_stats = true
+
+# 风险等级过滤: all / warning / critical
+highlight_risk_level = all
