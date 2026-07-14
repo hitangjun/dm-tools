@@ -9,8 +9,9 @@ DM SQL优化分析工具 - PyInstaller打包配置
     1. 需要安装PyInstaller: pip install pyinstaller
     2. 需要安装项目依赖: pip install -r requirements.txt
     3. dmPython用try/except动态导入，必须在hiddenimports中显式声明
-    4. dmdpi.dll是DM客户端驱动库，放入项目根目录后会自动打包
-       如果项目根目录没有dmdpi.dll，打包时不报错，但目标机器需要安装DM客户端
+    4. DM客户端驱动: 把 dmdpi.dll 及其传递依赖放入 dm-dll 子目录后会自动打包；
+       目标机器无需安装 DM 客户端。dm-dll 目录应只含 dmdpi.dll 的依赖闭包
+       (可用 pefile 解析导入表得出最小集)，避免打包无关的服务端/工具 DLL。
     5. Win7兼容性: 使用Python 3.10 + PySide6 6.4.x
 """
 
@@ -18,14 +19,23 @@ import os
 
 block_cipher = None
 
-# 检查dmdpi.dll是否存在于项目目录，存在则打包进去
+# 收集 DM 客户端运行所需的 DLL，一并打包后目标机器无需安装 DM 客户端。
+# 优先方案: dm-dll 目录 —— 该目录应存放 dmdpi.dll 及其完整传递依赖闭包
+#   (可用 pefile 解析导入表得出最小集；详见项目说明)。
+#   存在时打包目录下所有 .dll。
+# 回退方案: 项目根目录的 dmdpi.dll —— 仅打包驱动本体，目标机器需自行安装 DM 客户端。
 extra_datas = [('db_config.ini.template', '.')]
-if os.path.exists('dmdpi.dll'):
+if os.path.isdir('dm-dll'):
+    for name in sorted(os.listdir('dm-dll')):
+        if name.lower().endswith('.dll'):
+            extra_datas.append((os.path.join('dm-dll', name), '.'))
+    print(f"[INFO] dm-dll 目录存在，打包其中 {len(extra_datas) - 1} 个 DLL")
+elif os.path.exists('dmdpi.dll'):
     extra_datas.append(('dmdpi.dll', '.'))
-    print("[INFO] dmdpi.dll found, will be included in the package")
+    print("[INFO] 仅找到根目录 dmdpi.dll，目标机器需安装 DM 客户端以提供伴随 DLL")
 else:
-    print("[WARNING] dmdpi.dll not found in project directory")
-    print("[WARNING] Target machines will need DM client installed")
+    print("[WARNING] 未找到 dmdpi.dll 及 dm-dll 目录")
+    print("[WARNING] 目标机器需安装 DM 客户端")
 
 a = Analysis(
     ['main.py'],
