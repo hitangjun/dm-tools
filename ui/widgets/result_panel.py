@@ -8,14 +8,18 @@
 4. 统计信息 - 表/索引统计状态
 5. SQL规范 - 写法问题列表
 """
+import re
+from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QTreeWidget, QTreeWidgetItem, QTextEdit, QLabel,
     QProgressBar, QHeaderView, QGroupBox, QSplitter,
-    QApplication,
+    QApplication, QPushButton,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor, QTextCharFormat, QShortcut, QKeySequence
+
+from core.dm_connector import QueryResult
 
 
 # 颜色定义
@@ -74,22 +78,40 @@ class ResultPanel(QWidget):
 
         plan_splitter = QSplitter(Qt.Horizontal)
 
-        # 左侧：执行计划原始树
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(QLabel("达梦执行计划树 (层级缩进):"))
+        # 左侧：执行计划展示（层级计划树与原始执行计划 Tab 切换）
+        self.plan_left_tabs = QTabWidget()
+        
         self.plan_text = QTextEdit()
         self.plan_text.setReadOnly(True)
         self.plan_text.setFont(QFont("Consolas", 10))
-        left_layout.addWidget(self.plan_text)
-        plan_splitter.addWidget(left_widget)
+        self.plan_left_tabs.addTab(self.plan_text, "层级计划树")
+        
+        self.plan_raw_text = QTextEdit()
+        self.plan_raw_text.setReadOnly(True)
+        self.plan_raw_text.setFont(QFont("Consolas", 10))
+        self.plan_raw_text.setLineWrapMode(QTextEdit.NoWrap)  # 禁止折行以适应原始大表排版
+        self.plan_left_tabs.addTab(self.plan_raw_text, "原始执行计划")
+        
+        plan_splitter.addWidget(self.plan_left_tabs)
 
         # 右侧：问题列表 + 深度解析建议
         right_splitter = QSplitter(Qt.Vertical)
 
         issues_group = QGroupBox("执行计划潜在缺陷/性能瓶颈")
         issues_layout = QVBoxLayout(issues_group)
+        
+        # 按钮栏：导入外部计划进行离线分析
+        btn_layout = QHBoxLayout()
+        self.btn_import_plan = QPushButton("📥 导入外部计划进行离线分析")
+        self.btn_import_plan.setStyleSheet(
+            "QPushButton { background-color: #f1f5f9; font-weight: bold; padding: 4px 10px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #e2e8f0; }"
+        )
+        self.btn_import_plan.clicked.connect(self._on_import_plan_clicked)
+        btn_layout.addWidget(self.btn_import_plan)
+        btn_layout.addStretch()
+        issues_layout.addLayout(btn_layout)
+
         self.plan_issues_tree = QTreeWidget()
         self.plan_issues_tree.setHeaderLabels(["级别", "缺陷类别", "节点位置", "具体描述"])
         for col in range(4):
@@ -220,6 +242,7 @@ class ResultPanel(QWidget):
         stats_result=None,
         lint_result=None,
         plan_text="",
+        plan_raw_text="",
         error=None,
         ddls=None,
     ):
@@ -257,7 +280,7 @@ class ResultPanel(QWidget):
         self._show_overview(plan_result, index_result, stats_result, lint_result)
 
         # 执行计划
-        self._show_plan(plan_result, plan_text)
+        self._show_plan(plan_result, plan_text, plan_raw_text)
 
         # 索引建议
         self._show_index(index_result)
@@ -317,9 +340,10 @@ class ResultPanel(QWidget):
 
         self.overview_tab.setHtml(html)
 
-    def _show_plan(self, plan_result, plan_text):
+    def _show_plan(self, plan_result, plan_text, plan_raw_text=""):
         """执行计划"""
         self.plan_text.setPlainText(plan_text)
+        self.plan_raw_text.setPlainText(plan_raw_text or "暂无原始执行计划表格。")
         self.plan_issues_tree.clear()
         self.plan_explanation.clear()
 
@@ -365,6 +389,12 @@ class ResultPanel(QWidget):
         html += "  <li><b>使用 HINT 引导优化器</b>: 达梦支持类似 <code>/*+ USE_HASH(表名) */</code>，<code>/*+ INDEX(表名 索引名) */</code> 等 HINT 语法，可强制纠正由于 CBO 估算失准造成的连接类型/扫描路径选错。</li>"
         html += "  <li><b>优化全表扫描 (SSCN/CSCN)</b>: SSCN 为索引全扫描，CSCN 为聚集索引扫描（即全表扫描）。对有 CSCN 的大表，应检查 WHERE 条件列上是否遗漏了非聚集索引，或是否对索引列使用了函数计算（例如 <code>TO_CHAR(COL)</code>）导致索引失效。</li>"
         html += "</ul>"
+
+        # 插入动态生成的算子释义词典，极大提升离线模式下的易用性
+        glossary_html = self._generate_operator_glossary(plan_text)
+        if glossary_html:
+            html += glossary_html
+
         html += "</body></html>"
         
         self.plan_explanation.setHtml(html)
@@ -558,3 +588,202 @@ class ResultPanel(QWidget):
             parent = self.window()
             if hasattr(parent, "log"):
                 parent.log(f"已成功复制到剪贴板: {text[:100]}...", "SUCCESS")
+
+    def _generate_operator_glossary(self, plan_text: str) -> str:
+        """从计划文本中提取出现的算子并生成其通俗解释"""
+        if not plan_text:
+            return ""
+            
+        # 查找所有大写字母组成的算子名字，通常是└─后面的英文单词，如 CSCN2, BLKUP2, SSEK2
+        operators = set(re.findall(r'└─\s*([A-Z0-9_\s]+?)(?:\s*\[|$)', plan_text))
+        cleaned_ops = set()
+        for op in operators:
+            op_clean = op.strip()
+            op_first = op_clean.split()[0]
+            if op_first.isupper() and len(op_first) >= 3:
+                cleaned_ops.add(op_first)
+                
+        if not cleaned_ops:
+            return ""
+            
+        glossary = {
+            "NSET": ("结果集收集", "最终结果集的输出节点。通常是计划树的根节点。"),
+            "NSET2": ("结果集收集", "最终结果集的输出节点。通常是计划树的根节点。"),
+            "PRJT": ("投影算子", "选择输出列或计算表达式。将下层算子传递的数据做投影处理。"),
+            "PRJT2": ("投影算子", "选择输出列或计算表达式。将下层算子传递的数据做投影处理。"),
+            "SLCT": ("选择过滤", "根据 WHERE 条件过滤下层传递的数据行，只保留符合条件的记录。"),
+            "SLCT2": ("选择过滤", "根据 WHERE 条件过滤下层传递的数据行，只保留符合条件的记录。"),
+            "CSCN": ("聚集索引全表扫描", "<b style='color:red;'>高危操作！</b>读取整张表的所有数据。在大表上极消耗磁盘 I/O。建议在过滤条件列上建立索引。"),
+            "CSCN2": ("聚集索引全表扫描", "<b style='color:red;'>高危操作！</b>读取整张表的所有数据。在大表上极消耗磁盘 I/O。建议在过滤条件列上建立索引。"),
+            "SSCN": ("二级索引全扫描", "扫描整个二级索引树。通常比 CSCN（全表扫描）快，但读取整棵索引树依然代价不小。建议评估是否可优化过滤条件。"),
+            "SSCN2": ("二级索引全扫描", "扫描整个二级索引树。通常比 CSCN（全表扫描）快，但读取整棵索引树依然代价不小。建议评估是否可优化过滤条件。"),
+            "SSEK": ("二级索引等值定位", "通过二级索引树进行等值查找定位行。性能极佳，是理想的数据读取方式。"),
+            "SSEK2": ("二级索引等值定位", "通过二级索引树进行等值查找定位行。性能极佳，是理想的数据读取方式。"),
+            "CSEK": ("聚集索引范围定位", "在聚集索引（主键）上进行范围扫描。性能良好。"),
+            "CSEK2": ("聚集索引范围定位", "在聚集索引（主键）上进行范围扫描。性能良好。"),
+            "BLKUP": ("回表查找", "二级索引只存储了索引列和主键(ROWID)。当需要读取其他列时，必须使用主键返回主表再次读取记录。如果回表行数过多，I/O 开销非常大。建议使用<b>覆盖索引</b>（将 SELECT 列也加入索引中）以消除回表。"),
+            "BLKUP2": ("回表查找", "二级索引只存储了索引列和主键(ROWID)。当需要读取其他列时，必须使用主键返回主表再次读取记录。如果回表行数过多，I/O 开销非常大。建议使用<b>覆盖索引</b>（将 SELECT 列也加入索引中）以消除回表。"),
+            "SORT": ("排序算子", "对数据进行排序（由 ORDER BY / GROUP BY / DISTINCT 触发）。大数据量排序会使用临时表空间，降低速度。建议通过索引来避免排序。"),
+            "SORT3": ("排序算子", "对数据进行排序（由 ORDER BY / GROUP BY / DISTINCT 触发）。大数据量排序会使用临时表空间，降低速度。建议通过索引来避免排序。"),
+            "HAGR": ("哈希分组聚集", "通过构建哈希表执行 GROUP BY 聚合计算。速度通常较快，但会消耗较多内存。"),
+            "HAGR2": ("哈希分组聚集", "通过构建哈希表执行 GROUP BY 聚合计算。速度通常较快，但会消耗较多内存。"),
+            "AAGR": ("简单聚集", "在没有分组时计算聚集函数（如单独的 COUNT / SUM / AVG）。直接计算并输出单行结果。"),
+            "AAGR2": ("简单聚集", "在没有分组时计算聚集函数（如单独的 COUNT / SUM / AVG）。直接计算并输出单行结果。"),
+            "FAGR": ("快速聚集", "利用索引元数据快速计算 COUNT(*) 或 MAX/MIN。性能极高，不需要扫描全表。"),
+            "FAGR2": ("快速聚集", "利用索引元数据快速计算 COUNT(*) 或 MAX/MIN。性能极高，不需要扫描全表。"),
+            "NLJOIN": ("嵌套循环连接", "两表关联的一种方式。对外表的每一行，扫描一次内表。适用于外表行数极少、且内表关联列有索引的场景。若两表很大，性能极差。"),
+            "NLJOIN2": ("嵌套循环连接", "两表关联的一种方式。对外表的每一行，扫描一次内表。适用于外表行数极少、且内表关联列有索引的场景。若两表很大，性能极差。"),
+            "HJIN": ("哈希连接", "大表等值关联的常用方式。在内存中对小表构建哈希表，然后扫描大表进行匹配。速度较快，但较消耗内存。"),
+            "HJIN2": ("哈希连接", "大表等值关联的常用方式。在内存中对小表构建哈希表，然后扫描大表进行匹配。速度较快，但较消耗内存。"),
+            "MJIN": ("归并连接", "两表关联方式，两表均已按连接列排好序，像双指针一样合并。如果关联列有索引，性能极佳。"),
+            "MJIN3": ("归并连接", "两表关联方式，两表均已按连接列排好序，像双指针一样合并。如果关联列有索引，性能极佳。"),
+        }
+        
+        html = "<br/><h3>🔍 本计划包含算子名词释义 (通俗解说)</h3>"
+        html += "<table style='width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 9.5pt;'>"
+        html += "  <tr style='background-color: #f1f5f9;'>"
+        html += "    <th style='border: 1px solid #cbd5e1; padding: 6px; text-align: left; width: 100px;'>算子名称</th>"
+        html += "    <th style='border: 1px solid #cbd5e1; padding: 6px; text-align: left; width: 110px;'>标准中文名</th>"
+        html += "    <th style='border: 1px solid #cbd5e1; padding: 6px; text-align: left;'>通俗运行解释与调优方针</th>"
+        html += "  </tr>"
+        
+        found_any = False
+        for op in sorted(cleaned_ops):
+            if op in glossary:
+                found_any = True
+                ch_name, explain = glossary[op]
+                html += f"  <tr>"
+                html += f"    <td style='border: 1px solid #cbd5e1; padding: 6px; font-family: Consolas, monospace; font-weight: bold; color: #1e3a8a;'>{op}</td>"
+                html += f"    <td style='border: 1px solid #cbd5e1; padding: 6px; font-weight: bold; color: #334155;'>{ch_name}</td>"
+                html += f"    <td style='border: 1px solid #cbd5e1; padding: 6px; line-height: 1.5; color: #475569;'>{explain}</td>"
+                html += f"  </tr>"
+                
+        html += "</table>"
+        return html if found_any else ""
+
+    def _parse_raw_explain_text(self, text: str) -> Optional[QueryResult]:
+        """解析达梦数据库 EXPLAIN 原始表格输出文本"""
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        if not lines:
+            return None
+        
+        # 查找表头行
+        header_idx = -1
+        delimiter = None
+        for idx, line in enumerate(lines):
+            line_upper = line.upper()
+            if "LEVEL_ID" in line_upper and "OPERATION" in line_upper:
+                header_idx = idx
+                if "|" in line:
+                    delimiter = "|"
+                elif "\t" in line:
+                    delimiter = "\t"
+                break
+                
+        if header_idx == -1:
+            return None
+            
+        header_line = lines[header_idx]
+        if delimiter:
+            columns = [col.strip().upper() for col in header_line.split(delimiter)]
+        else:
+            columns = [col.strip().upper() for col in re.split(r'\s{2,}', header_line) if col.strip()]
+            
+        rows = []
+        for line in lines[header_idx + 1:]:
+            # 忽略分隔线 (例如 ---+---+---)
+            if set(line.replace("+", "").replace("-", "").replace("|", "").replace(" ", "")) <= {""}:
+                continue
+            if delimiter:
+                parts = [p.strip() for p in line.split(delimiter)]
+            else:
+                parts = [p.strip() for p in re.split(r'\s{2,}', line) if p.strip()]
+                
+            if len(parts) < len(columns):
+                parts += ["NULL"] * (len(columns) - len(parts))
+            else:
+                parts = parts[:len(columns)]
+                
+            row_cells = []
+            for p in parts:
+                if p == "NULL" or p == "" or p.upper() == "NULL":
+                    row_cells.append(None)
+                else:
+                    row_cells.append(p)
+            rows.append(row_cells)
+            
+        return QueryResult(columns=columns, rows=rows, row_count=len(rows), elapsed_ms=0.0)
+
+    def _on_import_plan_clicked(self):
+        """导入外部执行计划文本进行离线分析的对话框"""
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit, QDialogButtonBox, QLabel
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📥 导入外部达梦执行计划进行离线分析")
+        dialog.setMinimumSize(700, 500)
+        
+        dialog_layout = QVBoxLayout(dialog)
+        dialog_layout.addWidget(QLabel(
+            "请在下方粘贴从达梦 Manager、dmsql 或其他工具复制的原始 EXPLAIN 文本表格\n"
+            "（需包含 LEVEL_ID, OPERATION 等列的表格）或缩进树文本："
+        ))
+        
+        text_edit = QPlainTextEdit()
+        text_edit.setPlaceholderText(
+            "支持粘贴以下格式：\n"
+            "1. 带有表头的原始表格文本，例如：\n"
+            "PLAN_ID | LEVEL_ID | OPERATION | ...\n"
+            "1       | 0        | NSET2     | ...\n\n"
+            "2. 带行号或不带行号的层级缩进文本，例如：\n"
+            " 1 | └─ NSET2\n"
+            " 2 |   └─ PRJT2"
+        )
+        text_edit.setFont(QFont("Consolas", 10))
+        dialog_layout.addWidget(text_edit)
+        
+        dialog_layout.addWidget(QLabel("（可选）请输入该执行计划对应的原始 SQL 语句（用于关联分析 WHERE/JOIN 条件）："))
+        sql_edit = QPlainTextEdit()
+        sql_edit.setMaximumHeight(100)
+        sql_edit.setPlaceholderText("在此输入对应的 SQL 语句（留空则不进行条件映射关联）")
+        sql_edit.setFont(QFont("Consolas", 10))
+        dialog_layout.addWidget(sql_edit)
+        
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(button_box)
+        
+        if dialog.exec() == QDialog.Accepted:
+            raw_text = text_edit.toPlainText().strip()
+            sql_text = sql_edit.toPlainText().strip()
+            if not raw_text:
+                return
+            
+            # 解析导入
+            query_result = self._parse_raw_explain_text(raw_text)
+            from core.dm_connector import DMConnector
+            from core.plan_analyzer import PlanAnalyzer
+            
+            dummy_conn = DMConnector(None)
+            
+            if query_result:
+                plan_text = dummy_conn._format_explain(query_result)
+                plan_raw_text = dummy_conn._format_raw_table(query_result)
+            else:
+                plan_text = raw_text
+                plan_raw_text = "（离线直接导入层级缩进文本，无原始表格字段数据）"
+                
+            analyzer = PlanAnalyzer()
+            plan_result = analyzer.analyze(plan_text, sql_text)
+            
+            self.show_results(
+                plan_result=plan_result,
+                plan_text=plan_text,
+                plan_raw_text=plan_raw_text,
+            )
+            
+            self.setCurrentWidget(self.plan_tab)
+            
+            parent = self.window()
+            if hasattr(parent, "log"):
+                parent.log("成功导入并离线分析外部执行计划文本！", "SUCCESS")

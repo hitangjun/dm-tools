@@ -139,12 +139,9 @@ class DMConnector:
     # 执行计划
     # ------------------------------------------------------------------
 
-    def get_explain_plan(self, sql: str) -> str:
+    def get_explain_plan(self, sql: str) -> dict:
         """
-        获取SQL的执行计划文本
-
-        DM数据库通过 EXPLAIN 语句获取执行计划
-        返回执行计划的文本格式
+        获取SQL的执行计划，返回包含树状树与原始表格的对象字典
         """
         sql = sql.strip().rstrip(";")
         result = self.execute(f"EXPLAIN {sql}")
@@ -153,7 +150,16 @@ class DMConnector:
             result = self.execute(f"EXPLAIN FOR {sql}")
             if result.error:
                 raise RuntimeError(f"获取执行计划失败: {result.error}")
-        return self._format_explain(result)
+                
+        # 1. 树状层级执行计划
+        tree_text = self._format_explain(result)
+        # 2. 原始表格执行计划
+        raw_text = self._format_raw_table(result)
+        
+        return {
+            "tree": tree_text,
+            "raw": raw_text
+        }
 
     def _format_explain(self, result: QueryResult) -> str:
         """将查询结果格式化为执行计划文本"""

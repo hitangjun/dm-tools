@@ -88,9 +88,12 @@ class AnalyzeWorker(QThread):
             # 4. 执行计划分析
             self.log_message.emit("步骤 4/5: 正在连接达梦数据库获取动态执行计划树...", "INFO")
             plan_text = ""
+            plan_raw_text = ""
             if self.connector and self.connector.is_connected:
                 try:
-                    plan_text = self.connector.get_explain_plan(self.sql)
+                    plan_data = self.connector.get_explain_plan(self.sql)
+                    plan_text = plan_data["tree"]
+                    plan_raw_text = plan_data["raw"]
                     self.log_message.emit("成功捕获执行计划文本，正在对其算子深度解析...", "INFO")
                     results["plan"] = self.plan_analyzer.analyze(plan_text, self.sql)
                     if results["plan"] and results["plan"].issues:
@@ -185,6 +188,7 @@ class AnalyzeWorker(QThread):
                 self.log_message.emit("当前未连接到达梦数据库，已自动跳过步骤 4 (执行计划) 与步骤 5 (表统计校验)。", "WARNING")
 
             results["plan_text"] = plan_text
+            results["plan_raw_text"] = plan_raw_text
             self.log_message.emit("SQL深度优化分析流程全部完成。", "SUCCESS")
             self.finished.emit(results)
 
@@ -667,6 +671,7 @@ class MainWindow(QMainWindow):
             stats_result=results.get("stats"),
             lint_result=results.get("lint"),
             plan_text=results.get("plan_text", ""),
+            plan_raw_text=results.get("plan_raw_text", ""),
             error=results.get("plan_error") if not results.get("plan") else None,
             ddls=results.get("ddls"),
         )
