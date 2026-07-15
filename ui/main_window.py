@@ -92,7 +92,7 @@ class AnalyzeWorker(QThread):
                 try:
                     plan_text = self.connector.get_explain_plan(self.sql)
                     self.log_message.emit("成功捕获执行计划文本，正在对其算子深度解析...", "INFO")
-                    results["plan"] = self.plan_analyzer.analyze(plan_text)
+                    results["plan"] = self.plan_analyzer.analyze(plan_text, self.sql)
                     if results["plan"] and results["plan"].issues:
                         self.log_message.emit(f"执行计划解析完成，识别到 {len(results['plan'].issues)} 处潜在严重的性能瓶颈（如全表扫描/笛卡尔积）。", "WARNING")
                     else:

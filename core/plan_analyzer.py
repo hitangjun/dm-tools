@@ -90,12 +90,13 @@ class PlanAnalyzer:
         ("WINDOW SORT", "窗口函数排序"),
     ]
 
-    def analyze(self, plan_text: str) -> PlanAnalysisResult:
+    def analyze(self, plan_text: str, sql: str = "") -> PlanAnalysisResult:
         """
         分析执行计划，识别性能问题
 
         Args:
             plan_text: DM执行计划文本
+            sql: 原始 SQL 语句文本
 
         Returns:
             PlanAnalysisResult 分析结果
@@ -105,8 +106,8 @@ class PlanAnalyzer:
 
         for i, line in enumerate(lines):
             line_upper = line.upper().strip()
-            # 提取该行中可能的 SQL 片段 (过滤条件/连接条件)
-            sql_frag = self._extract_sql_fragment(line)
+            # 提取该行中可能的 SQL 片段 (过滤条件/连接条件/排序字段等)
+            sql_frag = self._extract_sql_fragment(line, sql)
             self._check_full_scan(line_upper, line, i, result, sql_frag)
             self._check_join(line_upper, line, i, result, sql_frag)
             self._check_sort(line_upper, line, i, result, sql_frag)
@@ -119,7 +120,7 @@ class PlanAnalyzer:
         return result
 
     @staticmethod
-    def _extract_sql_fragment(line: str) -> str:
+    def _extract_sql_fragment(line: str, sql: str = "") -> str:
         """
         从执行计划树节点行中提取与原始SQL对应的片段
         (过滤条件、连接条件、扫描范围等)
@@ -145,6 +146,24 @@ class PlanAnalyzer:
         m = re.search(r'扫描范围:\s*(.+?)(?:,|\]|$)', line)
         if m:
             fragments.append(f"扫描范围: {m.group(1).strip().rstrip(']')}")
+
+        # 如果是排序或分组聚合操作，且有传入SQL，尝试从原始SQL中提取对应的片段
+        if sql and any(kw in line.upper() for kw in ("SORT", "HGRP", "AAGR", "FAGR")):
+            sql_clean = " ".join(sql.split())
+            # 提取 ORDER BY 子句
+            order_match = re.search(r'\bORDER\s+BY\s+(.+?)(?:\bGROUP\b|\bHAVING\b|\bLIMIT\b|\bUNION\b|\bJOIN\b|$)', sql_clean, re.IGNORECASE)
+            if order_match:
+                fragments.append(f"排序子句: ORDER BY {order_match.group(1).strip().rstrip(';')}")
+            
+            # 提取 GROUP BY 子句
+            group_match = re.search(r'\bGROUP\s+BY\s+(.+?)(?:\bORDER\b|\bHAVING\b|\bLIMIT\b|\bUNION\b|\bJOIN\b|$)', sql_clean, re.IGNORECASE)
+            if group_match:
+                fragments.append(f"分组子句: GROUP BY {group_match.group(1).strip().rstrip(';')}")
+            
+            # 提取 DISTINCT
+            if "DISTINCT" in sql_clean.upper() and not order_match and not group_match:
+                fragments.append("去重子句: DISTINCT")
+
         return "; ".join(fragments) if fragments else ""
 
     # ------------------------------------------------------------------
