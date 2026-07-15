@@ -109,7 +109,34 @@ class ConnectionManagerDialog(QDialog):
         btn_form_layout.addWidget(self.btn_save)
         form_layout.addRow(btn_form_layout)
 
-        content_layout.addWidget(right_group, 2)
+        # 右侧容器，包含连接属性与安全建议
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(right_group)
+        
+        # 安全建议 QGroupBox
+        security_group = QGroupBox("🔒 数据库连接安全提示")
+        security_vbox = QVBoxLayout(security_group)
+        security_label = QLabel(
+            "为保障您的数据库安全，建议在优化分析时使用只读账号连接，避免直接使用 SYSDBA 管理员账户。\n"
+            "您可以通过点击下方按钮查看或一键复制专用的只读用户创建 SQL 脚本："
+        )
+        security_label.setWordWrap(True)
+        security_label.setStyleSheet("color: #4b5563; font-size: 9pt;")
+        security_vbox.addWidget(security_label)
+        
+        self.btn_show_sql = QPushButton("📄 查看/复制只读用户创建 SQL (create_readonly_user.sql)")
+        self.btn_show_sql.setStyleSheet(
+            "QPushButton { background-color: #f1f5f9; color: #1e3a8a; font-weight: bold; padding: 5px; }"
+            "QPushButton:hover { background-color: #e2e8f0; }"
+        )
+        self.btn_show_sql.clicked.connect(self._on_show_security_sql_clicked)
+        security_vbox.addWidget(self.btn_show_sql)
+        
+        right_layout.addWidget(security_group)
+        
+        content_layout.addWidget(right_container, 2)
         main_layout.addLayout(content_layout)
 
         # 底部: 关闭与确定连接按钮
@@ -259,3 +286,63 @@ class ConnectionManagerDialog(QDialog):
             pass
 
         self.accept()
+
+    def _on_show_security_sql_clicked(self):
+        """打开只读创建脚本展示与复制对话框"""
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit
+        from PySide6.QtGui import QFont
+        import os
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📄 只读用户创建 SQL 脚本 (create_readonly_user.sql)")
+        dialog.setMinimumSize(600, 450)
+        
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("达梦只读用户创建 SQL 脚本："))
+        
+        text_edit = QPlainTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setFont(QFont("Consolas", 10))
+        
+        sql_content = ""
+        script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts", "create_readonly_user.sql")
+        try:
+            if os.path.exists(script_path):
+                with open(script_path, "r", encoding="utf-8") as f:
+                    sql_content = f.read()
+        except Exception:
+            pass
+            
+        if not sql_content:
+            sql_content = """-- ============================================================
+-- DM数据库SQL优化分析工具 - 只读授权账号创建脚本
+-- ============================================================
+-- 步骤1: 创建用户
+CREATE USER "DM_READONLY" IDENTIFIED BY "Dm_ReadOnly_2024" DEFAULT TABLESPACE MAIN;
+-- 步骤2: 授予基本连接权限
+GRANT RESOURCE TO "DM_READONLY";
+-- 步骤3: 授予查询动态性能视图的权限
+GRANT SELECT ANY DICTIONARY TO "DM_READONLY";
+-- 步骤4: 授予查询所有用户表的权限(只读)
+GRANT SELECT ANY TABLE TO "DM_READONLY";
+"""
+            
+        text_edit.setPlainText(sql_content)
+        layout.addWidget(text_edit)
+        
+        btn_box = QHBoxLayout()
+        btn_copy = QPushButton("📋 复制全部 SQL 到剪贴板")
+        
+        def copy_sql():
+            QApplication.clipboard().setText(sql_content)
+            QMessageBox.information(dialog, "成功", "SQL 脚本已成功复制到剪贴板！")
+            
+        btn_copy.clicked.connect(copy_sql)
+        btn_box.addWidget(btn_copy)
+        
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dialog.accept)
+        btn_box.addWidget(btn_close)
+        
+        layout.addLayout(btn_box)
+        dialog.exec()
