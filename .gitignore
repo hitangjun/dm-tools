@@ -9,3 +9,4 @@ db_config.ini
 *.egg-info/
 .venv/
 venv/
+app_run.log

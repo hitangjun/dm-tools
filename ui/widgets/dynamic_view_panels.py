@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QTreeWidget, QTreeWidgetItem, QTextEdit, QPlainTextEdit, QLabel,
     QPushButton, QSpinBox, QHeaderView,
-    QMessageBox, QSplitter, QApplication,
+    QMessageBox, QSplitter, QApplication, QLineEdit,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QColor
@@ -41,7 +41,10 @@ class DynamicViewWorker(QThread):
                 data = self.manager.get_sql_history(self.params.get("limit", 50))
                 self.finished.emit("sql_history", data)
             elif self.task == "sessions":
-                data = self.manager.get_sessions(self.params.get("active_only", False))
+                data = self.manager.get_sessions(
+                    self.params.get("active_only", False),
+                    schema_filter=self.params.get("schema_filter", ""),
+                )
                 self.finished.emit("sessions", data)
             elif self.task == "node_timing":
                 exec_id = self.params.get("exec_id", 0)
@@ -331,7 +334,8 @@ class SlowSQLPanel(QWidget):
 
 class SessionPanel(QWidget):
     """会话监控面板"""
-    sql_selected = Signal(str)  # 会话右键操作信号
+    sql_selected = Signal(str)       # 会话右键 -> 分析此SQL
+    jump_to_node = Signal(str)       # 会话右键 -> 跳转节点耗时分析(传递 sess_id)
 
     def __init__(self, connector: DMConnector, log_fn=None, parent=None):
         super().__init__(parent)
@@ -353,16 +357,24 @@ class SessionPanel(QWidget):
         self.btn_active.clicked.connect(lambda: self._query(True))
         toolbar.addWidget(self.btn_active)
 
+        toolbar.addWidget(QLabel("  SCHEMA过滤:"))
+        self.schema_input = QLineEdit()
+        self.schema_input.setPlaceholderText("输入SCHEMA名称过滤(留空=全部)")
+        self.schema_input.setMaximumWidth(200)
+        self.schema_input.setClearButtonEnabled(True)
+        toolbar.addWidget(self.schema_input)
+
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["会话ID", "状态", "创建时间", "客户端", "SQL文本"])
+        self.tree.setHeaderLabels(["会话ID", "SCHEMA", "状态", "创建时间", "客户端", "SQL文本"])
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.tree.header().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.tree.header().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.tree.header().setSectionResizeMode(5, QHeaderView.Stretch)
         # 右键上下文菜单
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
@@ -380,11 +392,16 @@ class SessionPanel(QWidget):
             except RuntimeError:
                 self.worker = None
 
+        schema = self.schema_input.text().strip()
         if self.log_fn:
-            self.log_fn(f"正在查询会话信息 (仅活跃: {active_only})...")
+            extra = f", SCHEMA={schema}" if schema else ""
+            self.log_fn(f"正在查询会话信息 (仅活跃: {active_only}{extra})...")
 
         self.tree.clear()
-        self.worker = DynamicViewWorker(self.connector, "sessions", {"active_only": active_only})
+        self.worker = DynamicViewWorker(
+            self.connector, "sessions",
+            {"active_only": active_only, "schema_filter": schema},
+        )
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
         self.worker.finished.connect(self.worker.deleteLater)
@@ -395,13 +412,14 @@ class SessionPanel(QWidget):
         self.tree.clear()
         for item in data:
             tree_item = QTreeWidgetItem([
-                item.sess_id, item.state, item.create_time, item.clnt_host,
+                item.sess_id, item.curr_sch, item.state, item.create_time,
+                item.clnt_host,
                 item.sql_text[:200].replace("\n", " "),
             ])
             # 将完整 SQL 存入 column 0
             tree_item.setData(0, Qt.UserRole, item.sql_text)
             if item.state == "ACTIVE":
-                tree_item.setForeground(1, QColor("#dc2626"))
+                tree_item.setForeground(2, QColor("#dc2626"))
             self.tree.addTopLevelItem(tree_item)
         if self.log_fn:
             self.log_fn(f"会话监控查询完成，共 {len(data)} 个活动会话。", "SUCCESS")
@@ -428,6 +446,11 @@ class SessionPanel(QWidget):
         act_analyze.setEnabled(bool(sql and sql.strip()))
         act_analyze.triggered.connect(lambda: self.sql_selected.emit(sql))
         menu.addAction(act_analyze)
+
+        act_node = QAction("📊 跳转节点耗时分析", self)
+        act_node.setEnabled(bool(sess_id))
+        act_node.triggered.connect(lambda: self.jump_to_node.emit(sess_id))
+        menu.addAction(act_node)
         
         menu.addSeparator()
         

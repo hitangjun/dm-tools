@@ -29,6 +29,7 @@ class PlanIssue:
     description: str        # 问题描述
     suggestion: str         # 优化建议
     location: str = ""      # 在执行计划中的位置
+    sql_fragment: str = ""  # 导致问题的SQL片段(过滤条件/连接条件等)
 
 
 @dataclass
@@ -104,22 +105,53 @@ class PlanAnalyzer:
 
         for i, line in enumerate(lines):
             line_upper = line.upper().strip()
-            self._check_full_scan(line_upper, line, i, result)
-            self._check_join(line_upper, line, i, result)
-            self._check_sort(line_upper, line, i, result)
-            self._check_cartesian(line_upper, line, i, result)
-            self._check_high_cost(line_upper, line, i, result)
+            # 提取该行中可能的 SQL 片段 (过滤条件/连接条件)
+            sql_frag = self._extract_sql_fragment(line)
+            self._check_full_scan(line_upper, line, i, result, sql_frag)
+            self._check_join(line_upper, line, i, result, sql_frag)
+            self._check_sort(line_upper, line, i, result, sql_frag)
+            self._check_cartesian(line_upper, line, i, result, sql_frag)
+            self._check_high_cost(line_upper, line, i, result, sql_frag)
 
         # 计算代价评分
         result.cost_score = self._calculate_score(result)
         result.summary = self._generate_summary(result)
         return result
 
+    @staticmethod
+    def _extract_sql_fragment(line: str) -> str:
+        """
+        从执行计划树节点行中提取与原始SQL对应的片段
+        (过滤条件、连接条件、扫描范围等)
+        """
+        fragments = []
+        # 过滤条件(WHERE)
+        m = re.search(r'过滤条件\(WHERE\):\s*(.+?)(?:,\s*连接|,\s*优化|,\s*扫描|\]|$)', line)
+        if m:
+            fragments.append(f"WHERE条件: {m.group(1).strip().rstrip(']')}")
+        else:
+            m = re.search(r'过滤条件:\s*(.+?)(?:,\s*连接|,\s*优化|,\s*扫描|\]|$)', line)
+            if m:
+                fragments.append(f"WHERE条件: {m.group(1).strip().rstrip(']')}")
+        # 连接条件(ON)
+        m = re.search(r'连接条件\(ON\):\s*(.+?)(?:,\s*过滤|,\s*优化|,\s*扫描|\]|$)', line)
+        if m:
+            fragments.append(f"JOIN ON: {m.group(1).strip().rstrip(']')}")
+        else:
+            m = re.search(r'连接条件:\s*(.+?)(?:,\s*过滤|,\s*优化|,\s*扫描|\]|$)', line)
+            if m:
+                fragments.append(f"JOIN ON: {m.group(1).strip().rstrip(']')}")
+        # 扫描范围
+        m = re.search(r'扫描范围:\s*(.+?)(?:,|\]|$)', line)
+        if m:
+            fragments.append(f"扫描范围: {m.group(1).strip().rstrip(']')}")
+        return "; ".join(fragments) if fragments else ""
+
     # ------------------------------------------------------------------
     # 检查方法
     # ------------------------------------------------------------------
 
-    def _check_full_scan(self, line_upper, line, line_no, result):
+    def _check_full_scan(self, line_upper, line, line_no, result, sql_frag=""):
         """检查全表扫描"""
         for pattern in self.FULL_SCAN_PATTERNS:
             if re.search(pattern, line_upper):
@@ -127,80 +159,100 @@ class PlanAnalyzer:
                 # 提取表名 (支持 ON/OF/TABLE 以及格式化后的 表:)
                 table_match = re.search(r'(?:ON|OF|TABLE|表:)\s*(\w+)', line_upper)
                 table_name = table_match.group(1) if table_match else "未知表"
+                desc = f"检测到对表 {table_name} 的全表扫描，大数据量表上会导致严重性能问题"
+                if sql_frag:
+                    desc += f"。对应SQL子句: {sql_frag}"
                 result.issues.append(PlanIssue(
                      level=RiskLevel.CRITICAL,
                      category="全表扫描",
                      operation=line.strip(),
-                     description=f"检测到对表 {table_name} 的全表扫描，大数据量表上会导致严重性能问题",
+                     description=desc,
                      suggestion=f"建议在 {table_name} 的过滤条件列上创建合适的索引，"
                                 f"或检查WHERE条件是否可以使用已有索引",
                      location=f"第{line_no + 1}行",
+                     sql_fragment=sql_frag,
                 ))
                 break
 
-    def _check_join(self, line_upper, line, line_no, result):
+    def _check_join(self, line_upper, line, line_no, result, sql_frag=""):
         """检查连接操作"""
         for pattern, join_type in self.JOIN_PATTERNS:
             if re.search(pattern, line_upper):
                 result.join_count += 1
                 # 嵌套循环在大表场景下可能有问题
                 if "NESTED LOOP" in join_type or "NLJOIN" in pattern:
+                    desc = ("检测到嵌套循环连接(NESTED LOOP)，"
+                            "如果驱动表结果集较大，会导致内表被多次扫描")
+                    if sql_frag:
+                        desc += f"。对应SQL子句: {sql_frag}"
                     result.issues.append(PlanIssue(
                         level=RiskLevel.WARNING,
                         category="嵌套循环连接",
                         operation=line.strip(),
-                        description="检测到嵌套循环连接(NESTED LOOP)，"
-                                    "如果驱动表结果集较大，会导致内表被多次扫描",
+                        description=desc,
                         suggestion="确认驱动表返回少量数据；"
                                    "大表连接建议使用HASH JOIN；"
                                    "确保被驱动表的连接列上有索引",
                         location=f"第{line_no + 1}行",
+                        sql_fragment=sql_frag,
                     ))
                 break
 
-    def _check_sort(self, line_upper, line, line_no, result):
+    def _check_sort(self, line_upper, line, line_no, result, sql_frag=""):
         """检查排序操作"""
         for pattern in self.SORT_PATTERNS:
             if re.search(pattern, line_upper):
                 result.sort_count += 1
                 if "SORT" in pattern or "ORDER BY" in pattern:
+                    desc = ("检测到排序操作，大数据量排序会消耗大量内存，"
+                            "内存不足时会写临时表空间导致性能下降")
+                    if sql_frag:
+                        desc += f"。对应SQL子句: {sql_frag}"
                     result.issues.append(PlanIssue(
                         level=RiskLevel.INFO,
                         category="排序操作",
                         operation=line.strip(),
-                        description="检测到排序操作，大数据量排序会消耗大量内存，"
-                                    "内存不足时会写临时表空间导致性能下降",
+                        description=desc,
                         suggestion="检查是否可以通过索引消除排序；"
                                    "确认排序字段是否必要；"
                                    "考虑使用LIMIT/TOP减少排序数据量",
                         location=f"第{line_no + 1}行",
+                        sql_fragment=sql_frag,
                     ))
                 break
 
-    def _check_cartesian(self, line_upper, line, line_no, result):
+    def _check_cartesian(self, line_upper, line, line_no, result, sql_frag=""):
         """检查笛卡尔积"""
         if re.search(self.CARTESIAN_PATTERN, line_upper):
+            desc = "检测到笛卡尔积操作，会产生大量中间结果集，严重影响性能"
+            if sql_frag:
+                desc += f"。对应SQL子句: {sql_frag}"
             result.issues.append(PlanIssue(
                 level=RiskLevel.CRITICAL,
                 category="笛卡尔积",
                 operation=line.strip(),
-                description="检测到笛卡尔积操作，会产生大量中间结果集，严重影响性能",
+                description=desc,
                 suggestion="检查SQL是否遗漏了表连接条件(JOIN ON)；"
                            "确认所有参与连接的表都有正确的关联条件",
                 location=f"第{line_no + 1}行",
+                sql_fragment=sql_frag,
             ))
 
-    def _check_high_cost(self, line_upper, line, line_no, result):
+    def _check_high_cost(self, line_upper, line, line_no, result, sql_frag=""):
         """检查高代价操作"""
         for op_name, desc in self.HIGH_COST_OPS:
             if op_name.upper() in line_upper:
+                full_desc = f"检测到高代价操作: {desc}"
+                if sql_frag:
+                    full_desc += f"。对应SQL子句: {sql_frag}"
                 result.issues.append(PlanIssue(
                     level=RiskLevel.INFO,
                     category="高代价操作",
                     operation=line.strip(),
-                    description=f"检测到高代价操作: {desc}",
+                    description=full_desc,
                     suggestion="评估该操作是否必要，是否有更高效的替代方案",
                     location=f"第{line_no + 1}行",
+                    sql_fragment=sql_frag,
                 ))
                 break
 

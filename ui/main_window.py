@@ -308,6 +308,9 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         self.sql_editor = SQLEditor()
         self.sql_editor.analyze_requested.connect(self._on_analyze)
+        # 初始化加载历史分析SQL
+        if hasattr(self.app_config, "history_sqls") and self.app_config.history_sqls:
+            self.sql_editor.update_history(self.app_config.history_sqls)
         splitter.addWidget(self.sql_editor)
 
         self.result_panel = ResultPanel()
@@ -328,6 +331,7 @@ class MainWindow(QMainWindow):
 
         self.session_panel = SessionPanel(self.connector, log_fn=self.log)
         self.session_panel.sql_selected.connect(self._on_sql_selected_from_monitor)
+        self.session_panel.jump_to_node.connect(self._on_jump_to_node_analysis)
         self.monitor_tabs.addTab(self.session_panel, "会话监控")
 
         self.system_panel = SystemStatusPanel(self.connector, log_fn=self.log)
@@ -613,6 +617,19 @@ class MainWindow(QMainWindow):
         self.log("=" * 60)
         self.log("收到新的 SQL 优化分析请求。")
 
+        # 将 SQL 保存到历史分析中
+        if not hasattr(self.app_config, "history_sqls") or self.app_config.history_sqls is None:
+            self.app_config.history_sqls = []
+        if sql in self.app_config.history_sqls:
+            self.app_config.history_sqls.remove(sql)
+        self.app_config.history_sqls.insert(0, sql)
+        self.app_config.history_sqls = self.app_config.history_sqls[:50]
+        try:
+            save_config(self.app_config)
+            self.sql_editor.update_history(self.app_config.history_sqls)
+        except Exception as e:
+            self.log(f"保存SQL历史记录失败: {e}", "WARNING")
+
         if not self.connector or not self.connector.is_connected:
             reply = QMessageBox.question(
                 self, "未连接数据库",
@@ -675,6 +692,41 @@ class MainWindow(QMainWindow):
         self.sql_editor.set_sql(sql)
         self._switch_tab(0)  # 切换到 SQL 优化分析 Tab
         self._on_analyze(sql)  # 自动开始 SQL 分析流程
+
+    def _on_jump_to_node_analysis(self, sess_id: str):
+        """从会话监控跳转到节点耗时分析面板"""
+        if not sess_id:
+            return
+        self.log(f"从会话监控跳转到节点耗时分析 (会话ID: {sess_id})...")
+        # 确保主Tab在动态监控页
+        self.main_tabs.setCurrentWidget(self.monitor_tabs)
+        # 切换到节点耗时分析子Tab
+        node_tab_idx = self.monitor_tabs.indexOf(self.node_panel)
+        if node_tab_idx >= 0:
+            self.monitor_tabs.setCurrentIndex(node_tab_idx)
+
+        # 尝试通过会话ID获取最近的 EXEC_ID
+        if self.connector and self.connector.is_connected:
+            try:
+                res = self.connector.execute(f"""
+                    SELECT TOP 1 EXEC_ID
+                    FROM V$SQL_HISTORY
+                    WHERE SESS_ID = {sess_id}
+                    ORDER BY START_TIME DESC
+                """)
+                if not res.error and res.rows and res.rows[0][0]:
+                    exec_id = int(res.rows[0][0])
+                    self.node_panel.exec_id_spin.setValue(exec_id)
+                    self.log(f"已定位会话 {sess_id} 最近执行号: {exec_id}，自动查询节点耗时...", "SUCCESS")
+                    self.node_panel._query()
+                    return
+            except Exception as e:
+                self.log(f"通过会话ID获取执行号失败: {e}", "WARNING")
+
+        # 回退: 使用 exec_id=0 (最近一次)
+        self.node_panel.exec_id_spin.setValue(0)
+        self.node_panel._query()
+        self.log(f"未能精确定位会话 {sess_id} 的执行号，已使用最新执行号查询。", "WARNING")
 
     def _on_open_file(self):
         path, _ = QFileDialog.getOpenFileName(

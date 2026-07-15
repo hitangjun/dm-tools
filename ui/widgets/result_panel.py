@@ -12,9 +12,10 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QTreeWidget, QTreeWidgetItem, QTextEdit, QLabel,
     QProgressBar, QHeaderView, QGroupBox, QSplitter,
+    QApplication,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QColor, QTextCharFormat
+from PySide6.QtGui import QFont, QColor, QTextCharFormat, QShortcut, QKeySequence
 
 
 # 颜色定义
@@ -91,10 +92,9 @@ class ResultPanel(QWidget):
         issues_layout = QVBoxLayout(issues_group)
         self.plan_issues_tree = QTreeWidget()
         self.plan_issues_tree.setHeaderLabels(["级别", "缺陷类别", "节点位置", "具体描述"])
-        self.plan_issues_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.plan_issues_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.plan_issues_tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.plan_issues_tree.header().setSectionResizeMode(3, QHeaderView.Stretch)
+        for col in range(4):
+            self.plan_issues_tree.header().setSectionResizeMode(col, QHeaderView.Interactive)
+        self._setup_copy_menu(self.plan_issues_tree)
         issues_layout.addWidget(self.plan_issues_tree)
         right_splitter.addWidget(issues_group)
 
@@ -128,13 +128,9 @@ class ResultPanel(QWidget):
         self.existing_index_tree.setHeaderLabels([
             "表名", "索引名", "类型", "唯一性", "包含的列", "索引行数", "上次分析时间"
         ])
-        self.existing_index_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.existing_index_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.existing_index_tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.existing_index_tree.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.existing_index_tree.header().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.existing_index_tree.header().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.existing_index_tree.header().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        for col in range(7):
+            self.existing_index_tree.header().setSectionResizeMode(col, QHeaderView.Interactive)
+        self._setup_copy_menu(self.existing_index_tree)
         existing_layout.addWidget(self.existing_index_tree)
         index_splitter.addWidget(existing_group)
 
@@ -145,12 +141,9 @@ class ResultPanel(QWidget):
         self.index_tree.setHeaderLabels([
             "优先级", "表名", "建议类型", "建议列", "建议原因", "建议DDL语句"
         ])
-        self.index_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.index_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.index_tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.index_tree.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.index_tree.header().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.index_tree.header().setSectionResizeMode(5, QHeaderView.Stretch)
+        for col in range(6):
+            self.index_tree.header().setSectionResizeMode(col, QHeaderView.Interactive)
+        self._setup_copy_menu(self.index_tree, is_recommend_index=True)
         recommend_layout.addWidget(self.index_tree)
         index_splitter.addWidget(recommend_group)
 
@@ -169,10 +162,9 @@ class ResultPanel(QWidget):
         lint_layout = QVBoxLayout(self.lint_tab)
         self.lint_tree = QTreeWidget()
         self.lint_tree.setHeaderLabels(["级别", "规则", "问题描述", "建议"])
-        self.lint_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.lint_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.lint_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.lint_tree.header().setSectionResizeMode(3, QHeaderView.Stretch)
+        for col in range(4):
+            self.lint_tree.header().setSectionResizeMode(col, QHeaderView.Interactive)
+        self._setup_copy_menu(self.lint_tree)
         lint_layout.addWidget(self.lint_tree)
         self.tabs.addTab(self.lint_tab, "SQL写法规范")
 
@@ -377,6 +369,11 @@ class ResultPanel(QWidget):
         
         self.plan_explanation.setHtml(html)
 
+        # 动态自适应调整列宽，但保持可交互拉伸
+        for i in range(self.plan_issues_tree.columnCount()):
+            self.plan_issues_tree.resizeColumnToContents(i)
+            self.plan_issues_tree.setColumnWidth(i, max(self.plan_issues_tree.columnWidth(i) + 15, 80))
+
     def _show_index(self, index_result):
         """索引建议"""
         self.index_tree.clear()
@@ -423,6 +420,14 @@ class ResultPanel(QWidget):
                 item.setForeground(5, QColor("#808080"))
             self.index_tree.addTopLevelItem(item)
 
+        # 动态自适应调整列宽，但保持可交互拉伸
+        for i in range(self.existing_index_tree.columnCount()):
+            self.existing_index_tree.resizeColumnToContents(i)
+            self.existing_index_tree.setColumnWidth(i, max(self.existing_index_tree.columnWidth(i) + 15, 80))
+        for i in range(self.index_tree.columnCount()):
+            self.index_tree.resizeColumnToContents(i)
+            self.index_tree.setColumnWidth(i, max(self.index_tree.columnWidth(i) + 15, 80))
+
     def _show_stats(self, stats_result):
         """统计信息"""
         if not stats_result:
@@ -452,6 +457,11 @@ class ResultPanel(QWidget):
             item.setForeground(0, QColor(color))
             self.lint_tree.addTopLevelItem(item)
 
+        # 动态自适应调整列宽，但保持可交互拉伸
+        for i in range(self.lint_tree.columnCount()):
+            self.lint_tree.resizeColumnToContents(i)
+            self.lint_tree.setColumnWidth(i, max(self.lint_tree.columnWidth(i) + 15, 80))
+
     def _show_ddl(self, ddls):
         """展示表 DDL"""
         self.ddl_tables_tree.clear()
@@ -478,3 +488,73 @@ class ResultPanel(QWidget):
         table_name = current.text(0)
         ddl = self.ddls.get(table_name, "")
         self.ddl_text.setPlainText(ddl)
+
+    def _setup_copy_menu(self, tree_widget: QTreeWidget, is_recommend_index: bool = False):
+        """为 QTreeWidget 安装右键菜单和 Ctrl+C 复制支持"""
+        tree_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        tree_widget.customContextMenuRequested.connect(
+            lambda pos: self._show_tree_context_menu(tree_widget, pos, is_recommend_index)
+        )
+        
+        # 绑定 Ctrl+C 快捷键
+        shortcut = QShortcut(QKeySequence("Ctrl+C"), tree_widget)
+        shortcut.activated.connect(lambda: self._copy_tree_selection_to_clipboard(tree_widget))
+
+    def _show_tree_context_menu(self, tree, pos, is_recommend_index=False):
+        item = tree.itemAt(pos)
+        if not item:
+            return
+        
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+        
+        menu = QMenu(self)
+        
+        # 1. 复制选中行
+        act_copy_row = QAction("📋 复制选中行 (表格格式)", self)
+        act_copy_row.triggered.connect(lambda: self._copy_tree_row(tree, item))
+        menu.addAction(act_copy_row)
+        
+        # 2. 如果是推荐索引，添加一键复制 DDL 选项
+        if is_recommend_index:
+            # 建议 DDL 在最后一列 (Column 5)
+            ddl_text = item.text(5)
+            if ddl_text and ddl_text != "N/A":
+                act_copy_ddl = QAction("⚡ 复制推荐索引 DDL 语句", self)
+                act_copy_ddl.triggered.connect(lambda: self._copy_text_to_clipboard(ddl_text))
+                menu.addAction(act_copy_ddl)
+                
+        # 3. 复制特定单元格内容 (基于右击时选中的列)
+        col_idx = tree.columnAt(pos.x())
+        if 0 <= col_idx < tree.columnCount():
+            cell_text = item.text(col_idx)
+            col_name = tree.headerItem().text(col_idx)
+            act_copy_cell = QAction(f"📄 复制单元格: {col_name}", self)
+            act_copy_cell.triggered.connect(lambda: self._copy_text_to_clipboard(cell_text))
+            menu.addAction(act_copy_cell)
+            
+        menu.exec(tree.viewport().mapToGlobal(pos))
+
+    def _copy_tree_row(self, tree, item):
+        cells = []
+        for col in range(tree.columnCount()):
+            cells.append(item.text(col))
+        row_text = "\t".join(cells)
+        self._copy_text_to_clipboard(row_text)
+
+    def _copy_tree_selection_to_clipboard(self, tree):
+        selected = tree.selectedItems()
+        if not selected:
+            return
+        rows_text = []
+        for item in selected:
+            cells = [item.text(col) for col in range(tree.columnCount())]
+            rows_text.append("\t".join(cells))
+        self._copy_text_to_clipboard("\n".join(rows_text))
+
+    def _copy_text_to_clipboard(self, text):
+        if text:
+            QApplication.clipboard().setText(text)
+            parent = self.window()
+            if hasattr(parent, "log"):
+                parent.log(f"已成功复制到剪贴板: {text[:100]}...", "SUCCESS")

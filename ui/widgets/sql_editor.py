@@ -73,27 +73,28 @@ class SQLEditor(QWidget):
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("SQL语句:"))
 
-        self.example_combo = QComboBox()
-        self.example_combo.addItem("-- 选择示例SQL --", "")
-        self.example_combo.addItem("全表扫描示例",
-            "SELECT * FROM orders WHERE customer_name = '张三';")
-        self.example_combo.addItem("JOIN无索引示例",
-            "SELECT a.order_id, b.customer_name FROM orders a "
-            "JOIN customers b ON a.customer_id = b.customer_id "
-            "WHERE a.status = 'PENDING';")
-        self.example_combo.addItem("函数导致索引失效示例",
-            "SELECT * FROM users WHERE UPPER(username) = 'ADMIN' "
-            "AND create_time > '2024-01-01';")
-        self.example_combo.addItem("LIKE前导通配符示例",
-            "SELECT * FROM products WHERE product_name LIKE '%手机%' "
-            "AND status = 'ACTIVE';")
-        self.example_combo.currentIndexChanged.connect(self._on_example_changed)
-        toolbar.addWidget(self.example_combo)
+        self.history_combo = QComboBox()
+        self.history_combo.setPlaceholderText("-- 历史分析SQL --")
+        self.history_combo.setToolTip("选择之前分析过的 SQL 语句")
+        self.history_combo.currentIndexChanged.connect(self._on_history_changed)
+        self.history_combo.setMinimumWidth(200)
+        toolbar.addWidget(self.history_combo)
+
         toolbar.addStretch()
 
         self.clear_btn = QPushButton("清空")
         self.clear_btn.clicked.connect(self._on_clear)
         toolbar.addWidget(self.clear_btn)
+
+        self.format_btn = QPushButton("🔧 格式化")
+        self.format_btn.setStyleSheet(
+            "QPushButton { background-color: #059669; color: white; "
+            "font-weight: bold; padding: 6px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #047857; }"
+        )
+        self.format_btn.setToolTip("使用 sqlparse 对 SQL 语句进行标准化缩进与换行格式化")
+        self.format_btn.clicked.connect(self._on_format)
+        toolbar.addWidget(self.format_btn)
 
         self.analyze_btn = QPushButton("▶ 分析")
         self.analyze_btn.setStyleSheet(
@@ -125,13 +126,60 @@ class SQLEditor(QWidget):
     def _on_clear(self):
         self.editor.clear()
 
-    def _on_example_changed(self, index):
-        sql = self.example_combo.itemData(index)
-        if sql:
-            self.editor.setPlainText(sql)
+    def _on_format(self):
+        """使用 sqlparse 对 SQL 进行标准化格式化"""
+        sql = self.editor.toPlainText().strip()
+        if not sql:
+            return
+        try:
+            import sqlparse
+            formatted = sqlparse.format(
+                sql,
+                reindent=True,
+                keyword_case="upper",
+                identifier_case=None,
+                indent_width=4,
+                wrap_after=80,
+            )
+            self.editor.setPlainText(formatted)
+        except ImportError:
+            # sqlparse 未安装时简单清理空白
+            import re
+            keywords = [
+                "SELECT", "FROM", "WHERE", "JOIN", "INNER JOIN",
+                "LEFT JOIN", "RIGHT JOIN", "LEFT OUTER JOIN",
+                "ON", "AND", "OR", "ORDER BY", "GROUP BY",
+                "HAVING", "LIMIT", "UNION", "UNION ALL",
+                "INSERT INTO", "VALUES", "UPDATE", "SET", "DELETE FROM",
+            ]
+            result = re.sub(r'\s+', ' ', sql).strip()
+            for kw in sorted(keywords, key=len, reverse=True):
+                pattern = re.compile(r'\b' + kw + r'\b', re.IGNORECASE)
+                result = pattern.sub(f"\n{kw}", result)
+            self.editor.setPlainText(result.strip())
+
+
 
     def set_sql(self, sql: str):
         self.editor.setPlainText(sql)
 
     def get_sql(self) -> str:
         return self.editor.toPlainText()
+
+    def _on_history_changed(self, index):
+        if index < 0:
+            return
+        sql = self.history_combo.itemData(index)
+        if sql:
+            self.editor.setPlainText(sql)
+
+    def update_history(self, history_sqls: list[str]):
+        """更新历史分析SQL下拉列表"""
+        self.history_combo.blockSignals(True)
+        self.history_combo.clear()
+        self.history_combo.addItem("-- 历史分析SQL --", "")
+        for sql in history_sqls:
+            # 将换行变为空格并缩写作为展示文本
+            short_sql = " ".join(sql.split())[:60] + "..." if len(sql) > 60 else " ".join(sql.split())
+            self.history_combo.addItem(short_sql, sql)
+        self.history_combo.blockSignals(False)

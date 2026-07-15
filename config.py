@@ -54,12 +54,15 @@ class AppConfig:
     max_rows_explain: int = 10000
     enable_auto_stats: bool = True
     highlight_risk_level: str = "all"
+    history_sqls: list[str] = None
 
     def __post_init__(self):
         if self.connection is None:
             self.connection = DMConnectionConfig()
         if self.connections is None or len(self.connections) == 0:
             self.connections = [self.connection]
+        if self.history_sqls is None:
+            self.history_sqls = []
 
 
 def load_config() -> AppConfig:

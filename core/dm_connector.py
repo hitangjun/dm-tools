@@ -173,12 +173,17 @@ class DMConnector:
             cost_idx = col_names.index("COST") if "COST" in col_names else -1
             filter_idx = col_names.index("FILTER") if "FILTER" in col_names else -1
             join_idx = col_names.index("JOIN_COND") if "JOIN_COND" in col_names else -1
+            scan_idx = col_names.index("SCAN_TYPE") if "SCAN_TYPE" in col_names else -1
+            advice_idx = col_names.index("ADVICE_INFO") if "ADVICE_INFO" in col_names else -1
+            scan_range_idx = col_names.index("SCAN_RANGE") if "SCAN_RANGE" in col_names else -1
 
             lines = []
             lines.append("达梦数据库执行计划树 (层级缩进):")
             lines.append("=" * 90)
             
+            node_no = 0
             for row in result.rows:
+                node_no += 1
                 level = 0
                 try:
                     level = int(row[level_idx]) if row[level_idx] is not None else 0
@@ -197,16 +202,23 @@ class DMConnector:
                     info.append(f"估算行数: {row[rows_idx]}")
                 if cost_idx != -1 and row[cost_idx] and str(row[cost_idx]).upper() != "NULL":
                     info.append(f"估算代价: {row[cost_idx]}")
+                if scan_idx != -1 and row[scan_idx] and str(row[scan_idx]).upper() != "NULL":
+                    info.append(f"扫描方式: {row[scan_idx]}")
+                if scan_range_idx != -1 and row[scan_range_idx] and str(row[scan_range_idx]).upper() != "NULL":
+                    info.append(f"扫描范围: {row[scan_range_idx]}")
                 if filter_idx != -1 and row[filter_idx] and str(row[filter_idx]).upper() != "NULL":
-                    info.append(f"过滤条件: {row[filter_idx]}")
+                    info.append(f"过滤条件(WHERE): {row[filter_idx]}")
                 if join_idx != -1 and row[join_idx] and str(row[join_idx]).upper() != "NULL":
-                    info.append(f"连接条件: {row[join_idx]}")
+                    info.append(f"连接条件(ON): {row[join_idx]}")
+                if advice_idx != -1 and row[advice_idx] and str(row[advice_idx]).upper() != "NULL":
+                    info.append(f"优化器建议: {row[advice_idx]}")
                 
                 info_str = f" [{', '.join(info)}]" if info else ""
                 
-                # 使用缩进空格表示树层级
+                # 使用缩进空格表示树层级，带行号前缀
                 indent = "  " * level
-                lines.append(f"{indent}└─ {op}{info_str}")
+                line_num = f"{node_no:>3}"
+                lines.append(f"{line_num} | {indent}└─ {op}{info_str}")
                 
             lines.append("=" * 90)
             return "\n".join(lines)

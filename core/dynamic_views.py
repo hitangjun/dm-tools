@@ -159,7 +159,7 @@ class DynamicViewManager:
     # 会话监控
     # ------------------------------------------------------------------
 
-    def get_sessions(self, active_only: bool = False) -> list[SessionItem]:
+    def get_sessions(self, active_only: bool = False, schema_filter: str = "") -> list[SessionItem]:
         """
         获取当前会话信息
 
@@ -168,7 +168,14 @@ class DynamicViewManager:
         if not self.connector or not self.connector.is_connected:
             return []
 
-        where_clause = "WHERE STATE = 'ACTIVE'" if active_only else ""
+        conditions = []
+        if active_only:
+            conditions.append("STATE = 'ACTIVE'")
+        if schema_filter and schema_filter.strip():
+            safe_schema = schema_filter.strip().replace("'", "''")
+            conditions.append(f"CURR_SCH = '{safe_schema}'")
+        
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         result = self.connector.execute(f"""
             SELECT SESS_ID, SQL_TEXT, STATE, CREATE_TIME, CLNT_HOST, CURR_SCH
             FROM V$SESSIONS
