@@ -693,6 +693,19 @@ class NodeTimingPanel(QWidget):
         self.tree.header().setSectionResizeMode(3, QHeaderView.Stretch)
         layout.addWidget(self.tree)
 
+        # 底部提示语
+        tip_label = QLabel(
+            "💡 使用提示:\n"
+            "1. EXEC_ID 是达梦数据库中单次 SQL 执行的唯一标识号（每次执行自动递增，不是会话 ID）。\n"
+            "   从会话监控右键跳转时，工具会自动定位并为您填充该会话最近一次的 EXEC_ID。\n"
+            "2. 如果查询无结果，是因为达梦数据库默认关闭了执行节点监控参数。请使用 SYSDBA 运行以下命令启用（即时生效）：\n"
+            "   CALL SP_SET_PARA_VALUE(1, 'ENABLE_MONITOR', 1);\n"
+            "   CALL SP_SET_PARA_VALUE(1, 'MONITOR_SQL_EXEC', 1);"
+        )
+        tip_label.setWordWrap(True)
+        tip_label.setStyleSheet("color: #4b5563; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 8px; font-size: 9pt;")
+        layout.addWidget(tip_label)
+
     def _query(self):
         if not self.connector or not self.connector.is_connected:
             QMessageBox.warning(self, "未连接", "请先连接DM数据库")
