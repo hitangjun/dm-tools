@@ -367,6 +367,7 @@ class MainWindow(QMainWindow):
     def _init_knowledge_tab(self):
         """文档知识库Tab"""
         self.knowledge_panel = KnowledgePanel()
+        self.knowledge_panel.sql_example_clicked.connect(self.sql_editor.set_sql)
         self.main_tabs.addTab(self.knowledge_panel, "📚 文档知识库")
 
     def _init_doc_dock(self):

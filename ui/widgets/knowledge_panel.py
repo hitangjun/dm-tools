@@ -3,10 +3,8 @@
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QTreeWidget, QTreeWidgetItem, QTextEdit, QLabel,
-    QHeaderView, QPushButton,
+    QTreeWidget, QTreeWidgetItem, QLabel, QHeaderView,
 )
-from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt, Signal
 
 from core.doc_knowledge import DocKnowledgeBase
@@ -15,6 +13,7 @@ from ui.widgets.doc_info_widget import DocInfoWidget
 
 class KnowledgePanel(QWidget):
     """知识库浏览面板"""
+    sql_example_clicked = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,9 +22,10 @@ class KnowledgePanel(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         title = QLabel("达梦官方文档知识库")
-        title.setStyleSheet("font-size: 14pt; font-weight: bold; padding: 5px;")
+        title.setStyleSheet("font-size: 13pt; font-weight: bold; padding: 5px; color: #1e293b;")
         layout.addWidget(title)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -33,54 +33,37 @@ class KnowledgePanel(QWidget):
         # 左侧: 功能列表
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["功能", "文档来源"])
-        self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.Interactive)
 
         for snippet in self.kb.get_all():
             item = QTreeWidgetItem([snippet.feature_name, snippet.doc_source])
             item.setData(0, Qt.UserRole, snippet.feature_id)
             self.tree.addTopLevelItem(item)
 
+        for i in range(self.tree.columnCount()):
+            self.tree.resizeColumnToContents(i)
+            self.tree.setColumnWidth(i, max(self.tree.columnWidth(i) + 25, 120))
+
         self.tree.currentItemChanged.connect(self._on_selected)
         splitter.addWidget(self.tree)
 
-        # 右侧: 文档详情
-        self.detail_text = QTextEdit()
-        self.detail_text.setReadOnly(True)
-        self.detail_text.setFont(QFont("Microsoft YaHei", 10))
-        splitter.addWidget(self.detail_text)
+        # 右侧: 文档详情 (复用 DocInfoWidget)
+        self.detail_widget = DocInfoWidget()
+        self.detail_widget.sql_example_clicked.connect(self.sql_example_clicked)
+        splitter.addWidget(self.detail_widget)
 
-        splitter.setSizes([300, 700])
+        splitter.setSizes([320, 780])
         layout.addWidget(splitter)
+
+        # 默认选中第一个
+        if self.tree.topLevelItemCount() > 0:
+            self.tree.setCurrentItem(self.tree.topLevelItem(0))
 
     def _on_selected(self, current, previous):
         if not current:
+            self.detail_widget.set_snippet(None)
             return
         feature_id = current.data(0, Qt.UserRole)
         snippet = self.kb.get(feature_id)
-        if not snippet:
-            return
-
-        html = "<html><body style='font-family: Microsoft YaHei; font-size: 10pt; line-height: 1.6;'>"
-        html += f"<h2>{snippet.feature_name}</h2>"
-        html += f"<p><b>文档来源:</b> <a href='{snippet.doc_url}'>{snippet.doc_source}</a></p>"
-
-        html += "<h3>📄 文档内容</h3>"
-        html += f"<div style='background:#f0f9ff; border:1px solid #bae6fd; border-radius:5px; padding:10px;'>"
-        html += f"<pre style='white-space:pre-wrap;'>{snippet.doc_content}</pre>"
-        html += "</div>"
-
-        html += "<h3>💡 操作提示</h3>"
-        html += f"<div style='background:#fffbeb; border:1px solid #fde68a; border-radius:5px; padding:10px;'>"
-        html += f"<pre style='white-space:pre-wrap;'>{snippet.tips}</pre>"
-        html += "</div>"
-
-        if snippet.sql_examples:
-            html += "<h3>📝 SQL示例</h3>"
-            html += "<div style='background:#1e1b4b; color:#a5f3fc; border-radius:5px; padding:10px;'>"
-            for sql in snippet.sql_examples:
-                html += f"<pre style='white-space:pre-wrap;'>{sql}</pre><hr style='border:0; border-top:1px solid #3730a3;'>"
-            html += "</div>"
-
-        html += "</body></html>"
-        self.detail_text.setHtml(html)
+        self.detail_widget.set_snippet(snippet)
