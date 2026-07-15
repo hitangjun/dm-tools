@@ -83,22 +83,25 @@ class DocInfoWidget(QWidget):
                 margin-bottom: 5px;
             }}
             .content-box {{
-                background-color: #f0f9ff;
-                border: 1px solid #bae6fd;
+                background-color: #f1f5f9;
+                border: 1px solid #cbd5e1;
                 border-radius: 6px;
-                padding: 12px;
-                font-family: Consolas, 'Courier New', monospace;
+                padding: 14px;
+                font-family: 'Microsoft YaHei', -apple-system, sans-serif;
+                font-size: 10.5pt;
                 white-space: pre-wrap;
-                color: #0369a1;
+                color: #334155;
                 margin-bottom: 15px;
             }}
             .tips-box {{
                 background-color: #fffbeb;
                 border: 1px solid #fde68a;
                 border-radius: 6px;
-                padding: 12px;
+                padding: 14px;
+                font-family: 'Microsoft YaHei', -apple-system, sans-serif;
+                font-size: 10.5pt;
                 white-space: pre-wrap;
-                color: #b45309;
+                color: #92400e;
                 margin-bottom: 15px;
             }}
             .sql-box {{
