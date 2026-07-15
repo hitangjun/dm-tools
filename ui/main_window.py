@@ -722,7 +722,7 @@ class MainWindow(QMainWindow):
                 """)
                 if not res.error and res.rows and res.rows[0][0]:
                     exec_id = int(res.rows[0][0])
-                    self.node_panel.exec_id_spin.setValue(exec_id)
+                    self.node_panel.exec_id_input.setText(str(exec_id))
                     self.log(f"已定位会话 {sess_id} 最近执行号: {exec_id}，自动查询节点耗时...", "SUCCESS")
                     self.node_panel._query()
                     return
@@ -730,7 +730,7 @@ class MainWindow(QMainWindow):
                 self.log(f"通过会话ID获取执行号失败: {e}", "WARNING")
 
         # 回退: 使用 exec_id=0 (最近一次)
-        self.node_panel.exec_id_spin.setValue(0)
+        self.node_panel.exec_id_input.setText("0")
         self.node_panel._query()
         self.log(f"未能精确定位会话 {sess_id} 的执行号，已使用最新执行号查询。", "WARNING")
 

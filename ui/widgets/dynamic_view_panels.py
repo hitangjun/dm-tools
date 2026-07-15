@@ -671,11 +671,12 @@ class NodeTimingPanel(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("EXEC_ID:"))
-        self.exec_id_spin = QSpinBox()
-        self.exec_id_spin.setRange(0, 999999999)
-        self.exec_id_spin.setValue(0)
-        self.exec_id_spin.setToolTip("0=自动获取最近一次执行的ID")
-        toolbar.addWidget(self.exec_id_spin)
+        self.exec_id_input = QLineEdit()
+        self.exec_id_input.setPlaceholderText("0")
+        self.exec_id_input.setText("0")
+        self.exec_id_input.setToolTip("输入执行ID，0表示自动获取最近一次执行的ID")
+        self.exec_id_input.setFixedWidth(140)
+        toolbar.addWidget(self.exec_id_input)
 
         self.btn_query = QPushButton("查询节点耗时")
         self.btn_query.clicked.connect(self._query)
@@ -704,7 +705,11 @@ class NodeTimingPanel(QWidget):
             except RuntimeError:
                 self.worker = None
 
-        exec_id = self.exec_id_spin.value()
+        try:
+            exec_id_str = self.exec_id_input.text().strip()
+            exec_id = int(exec_id_str) if exec_id_str else 0
+        except ValueError:
+            exec_id = 0
         if self.log_fn:
             self.log_fn(f"正在查询执行计划节点耗时 (EXEC_ID: {'最新' if exec_id==0 else exec_id})...")
 
